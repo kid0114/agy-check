@@ -1,5 +1,5 @@
 {
-  "name": "agy-hud-plus",
+  "name": "agy-hud-kk",
   "version": "0.4.0",
   "description": "Enhanced real-time statusline HUD for Antigravity CLI with dual output speed, hook-timed tool duration, accurate turn & session cache hit rate, and multi-account quota tracking",
   "main": "runtime/bin/agy-hud.js",
@@ -17,11 +17,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kid0114/agy-hud-plus.git"
+    "url": "git+https://github.com/kid0114/agy-hud-kk.git"
   },
-  "homepage": "https://github.com/kid0114/agy-hud-plus#readme",
+  "homepage": "https://github.com/kid0114/agy-hud-kk#readme",
   "bugs": {
-    "url": "https://github.com/kid0114/agy-hud-plus/issues"
+    "url": "https://github.com/kid0114/agy-hud-kk/issues"
   },
   "scripts": {
     "test": "node --test tests/unit/*.test.mjs",

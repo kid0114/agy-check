@@ -14,7 +14,7 @@ const { resolveAntigravityPath } = require('../paths.js');
 
 async function handleSelfUpdate() {
   console.log('Checking for latest installer...');
-  const bootstrapUrl = 'https://raw.githubusercontent.com/kid0114/agy-hud-plus/main/scripts/bootstrap.js';
+  const bootstrapUrl = 'https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/bootstrap.js';
   const tempPath = path.join(os.tmpdir(), `agy-hud-bootstrap-${Date.now()}.js`);
 
   try {

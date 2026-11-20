@@ -7,7 +7,7 @@ const https = require('https');
 const os = require('os');
 const path = require('path');
 
-const DEFAULT_SOURCE_BASE = 'https://raw.githubusercontent.com/kid0114/agy-hud-plus/main';
+const DEFAULT_SOURCE_BASE = 'https://raw.githubusercontent.com/kid0114/agy-hud-kk/main';
 
 const RUNTIME_FILES = [
   'package.json',
@@ -138,7 +138,7 @@ function getPluginDirs(antigravityRoot, options = {}) {
   const env = options.env || process.env;
   const homeDir = options.homeDir || os.homedir();
   const dirs = [];
-  for (const name of ['agy-hud-plus', 'agy-hud']) {
+  for (const name of ['agy-hud-kk', 'agy-hud']) {
     // agy 1.0.x stages imported plugins under ~/.gemini/config/plugins.
     dirs.push(path.join(homeDir, '.gemini', 'config', 'plugins', name));
     // Older agy-hud releases and early agy builds used antigravity-cli/plugins.

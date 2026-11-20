@@ -11,9 +11,9 @@ const { configureTimerHooks } = require('../../runtime/statusline-installer.js')
 const { clearTimerHooks } = require('../../runtime/uninstall.js');
 const { resolveToolWindowMs } = require('../../runtime/invocation-timer.js');
 
-describe('agy-hud-plus enhancements', () => {
+describe('agy-hud-kk enhancements', () => {
   test('parser reads native agy PLANNER_RESPONSE token fields and aggregates sessionCache', async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-plus-parser-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-kk-parser-'));
     try {
       const tp = path.join(tmp, 'transcript.jsonl');
       fs.writeFileSync(tp, [
@@ -43,7 +43,7 @@ describe('agy-hud-plus enhancements', () => {
   });
 
   test('configureTimerHooks and clearTimerHooks preserve unrelated user hooks', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-plus-hooks-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-kk-hooks-'));
     try {
       const hooksPath = path.join(tmp, 'hooks.json');
       fs.writeFileSync(hooksPath, JSON.stringify({
@@ -82,7 +82,7 @@ describe('agy-hud-plus enhancements', () => {
   });
 
   test('resolveToolWindowMs computes tool duration from transcript start midpoint and PostToolUse end', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-plus-timer-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hud-kk-timer-'));
     try {
       const tp = path.join(tmp, 'transcript.jsonl');
       const startIso = '2026-11-20T00:00:10Z';
