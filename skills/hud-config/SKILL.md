@@ -3,9 +3,9 @@ name: hud-config
 description: 当用户想要配置或自定义 agy-hud 的显示设置（主题、图标、面板模式等）时触发。
 ---
 
-# 交互式配置 agy-hud-kk 状态栏
+# 交互式配置 agy-check 状态栏
 
-当用户要求修改、设置、美化或配置 agy-hud / agy-hud-kk 状态栏时，请遵循以下流程：
+当用户要求修改、设置、美化或配置 agy-hud / agy-check 状态栏时，请遵循以下流程：
 
 1. **发起交互选择题**：
    使用 `ask_question` 工具对用户发起提问，包含以下选项让用户进行单选：

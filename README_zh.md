@@ -1,4 +1,4 @@
-# agy-hud-kk
+# agy-check
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
@@ -10,7 +10,7 @@
 
 ## 效果演示
 
-![agy-hud-kk demo](./assets/demo.png)
+![agy-check demo](./assets/demo.png)
 
 ```text
 user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI Ultra │ out: 68.5 (net≈24.1) tok/s │ tooltime: 3m30s
@@ -25,7 +25,7 @@ user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI 
 
 ## 相对原版 `agy-hud` 的增强项
 
-| 功能 | 原版 `agy-hud` | `agy-hud-kk` |
+| 功能 | 原版 `agy-hud` | `agy-check` |
 |---|---|---|
 | **输出速度（`out` / `net≈`）** | 仅估算总输出速度，且未精准扣除工具执行耗时 | 通过 `PreInvocation` / `PostToolUse` / `PostInvocation` Hook 精确拆分模型推理与工具执行时间，同时展示总输出速度（含 thinking）与可见净输出速度 `net≈` |
 | **工具耗时（`tooltime`）** | 不支持 | 累计当前会话全部工具调用耗时，安装脚本自动注册到 `~/.gemini/config/hooks.json` |
@@ -83,24 +83,24 @@ user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI 
 
 **macOS / Linux：**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.sh)
 ```
 
 **Windows PowerShell：**
 ```powershell
-irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex
 ```
 
 **Windows CMD：**
 ```cmd
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex"
 ```
 
 ### 从本地克隆安装
 
 ```bash
-git clone https://github.com/kid0114/agy-hud-kk.git
-cd agy-hud-kk
+git clone https://github.com/kid0114/agy-check.git
+cd agy-check
 agy plugin install .
 node scripts/bootstrap.js
 ```
@@ -199,12 +199,12 @@ npm test
 
 **macOS / Linux：**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/uninstall.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.sh)
 ```
 
 **Windows PowerShell：**
 ```powershell
-irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.ps1 | iex
 ```
 
 卸载脚本会清除 `settings.json` 中的 `statusLine`、移除 `hooks.json` 中的 `agy-hud-invocation-timer`（保留其他 Hook）、删除 `agy-hud-runtime` 与缓存文件，并卸载插件。

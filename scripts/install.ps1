@@ -1,34 +1,34 @@
-﻿# One-command installer for agy-hud-kk (Windows PowerShell).
+﻿# One-command installer for agy-check (Windows PowerShell).
 # Equivalent of install.sh for Unix — does:
-#   1. agy plugin install (or upgrade) https://github.com/kid0114/agy-hud-kk.git
+#   1. agy plugin install (or upgrade) https://github.com/kid0114/agy-check.git
 #   2. bootstrap runtime + configure settings.json statusLine + hooks.json timer hooks
 #
 # Run from a normal shell — NOT from inside an active `agy` session
 # (agy rewrites settings.json from in-memory state on exit).
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex
 #
 # Env:
 #   AGY_HUD_REPO_RAW    override raw GitHub base URL (forks / mirrors)
 #   AGY_HUD_REPO_URL    override git URL for `agy plugin install`
 $ErrorActionPreference = 'Stop'
 
-$RepoRaw = if ($env:AGY_HUD_REPO_RAW) { $env:AGY_HUD_REPO_RAW } else { 'https://raw.githubusercontent.com/kid0114/agy-hud-kk/main' }
-$RepoUrl = if ($env:AGY_HUD_REPO_URL) { $env:AGY_HUD_REPO_URL } else { 'https://github.com/kid0114/agy-hud-kk.git' }
+$RepoRaw = if ($env:AGY_HUD_REPO_RAW) { $env:AGY_HUD_REPO_RAW } else { 'https://raw.githubusercontent.com/kid0114/agy-check/main' }
+$RepoUrl = if ($env:AGY_HUD_REPO_URL) { $env:AGY_HUD_REPO_URL } else { 'https://github.com/kid0114/agy-check.git' }
 
 if (-not (Get-Command agy -ErrorAction SilentlyContinue)) {
-    Write-Error "agy-hud-kk: agy CLI not on PATH. Install it first:`n  irm https://antigravity.google/cli/install.ps1 | iex"
+    Write-Error "agy-check: agy CLI not on PATH. Install it first:`n  irm https://antigravity.google/cli/install.ps1 | iex"
     exit 1
 }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Error "agy-hud-kk: node is required but not on PATH."
+    Write-Error "agy-check: node is required but not on PATH."
     exit 1
 }
 
 # Step 1: stage the plugin. Uninstall any previous install so stale files don't linger.
-Write-Host "==> Removing any existing agy-hud / agy-hud-kk plugin install..."
-try { agy plugin uninstall agy-hud-kk 2>$null } catch {}
+Write-Host "==> Removing any existing agy-hud / agy-check plugin install..."
+try { agy plugin uninstall agy-check 2>$null } catch {}
 try { agy plugin uninstall agy-hud 2>$null } catch {}
 
 Write-Host "==> Installing plugin from $RepoUrl..."
@@ -50,6 +50,6 @@ try {
 }
 
 Write-Host ""
-Write-Host "==> agy-hud-kk installed."
+Write-Host "==> agy-check installed."
 Write-Host "    Open a new agy session in your terminal to see the HUD."
 Write-Host "    Repair or update anytime by re-running this script."

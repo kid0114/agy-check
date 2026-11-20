@@ -1,6 +1,6 @@
-# Remove agy-hud-kk (and legacy agy-hud) from this machine (Windows).
+# Remove agy-check (and legacy agy-hud) from this machine (Windows).
 # 1. Run runtime\uninstall.js (clears settings.statusLine, timer hook, runtime dir, tmp tokens)
-# 2. Run `agy plugin uninstall agy-hud-kk`
+# 2. Run `agy plugin uninstall agy-check`
 $ErrorActionPreference = 'Continue'
 
 $Runtime = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\agy-hud-runtime\runtime\uninstall.js'
@@ -8,10 +8,10 @@ $Runtime = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\agy-hud-runtime\r
 if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path $Runtime)) {
     node $Runtime
 } else {
-    Write-Error "agy-hud-kk uninstall: runtime not found at $Runtime - skipping settings cleanup"
+    Write-Error "agy-check uninstall: runtime not found at $Runtime - skipping settings cleanup"
 }
 
-foreach ($PluginName in @('agy-hud-kk', 'agy-hud')) {
+foreach ($PluginName in @('agy-check', 'agy-hud')) {
     $PluginDir = Join-Path $env:USERPROFILE ".gemini\config\plugins\$PluginName"
     if (Get-Command agy -ErrorAction SilentlyContinue) {
         agy plugin uninstall $PluginName 2>$null
@@ -23,4 +23,4 @@ foreach ($PluginName in @('agy-hud-kk', 'agy-hud')) {
     }
 }
 
-Write-Host "agy-hud-kk uninstall complete"
+Write-Host "agy-check uninstall complete"

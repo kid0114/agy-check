@@ -1,5 +1,5 @@
 {
-  "name": "agy-hud-kk",
+  "name": "agy-check",
   "version": "0.4.0",
   "description": "Enhanced real-time HUD for Antigravity CLI (speed, tool time, cache hit rate, quota)"
 }

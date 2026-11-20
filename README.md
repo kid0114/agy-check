@@ -1,4 +1,4 @@
-# agy-hud-kk
+# agy-check
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
@@ -10,7 +10,7 @@
 
 ## Preview
 
-![agy-hud-kk demo](./assets/demo.png)
+![agy-check demo](./assets/demo.png)
 
 ```text
 user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI Ultra │ out: 68.5 (net≈24.1) tok/s │ tooltime: 3m30s
@@ -25,7 +25,7 @@ user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI 
 
 ## What's Enhanced Over Upstream `agy-hud`
 
-| Capability | Upstream `agy-hud` | `agy-hud-kk` |
+| Capability | Upstream `agy-hud` | `agy-check` |
 |---|---|---|
 | **Output speed (`out` / `net≈`)** | Total `tok/s` from coarse fallback or cost duration | Hook-timed model duration excluding tool time (`PreInvocation` / `PostToolUse` / `PostInvocation`), showing both total speed (with thinking) and visible net speed `net≈` |
 | **Tool execution time (`tooltime`)** | Not available | Cumulative tool runtime across the session, automatically wired via `~/.gemini/config/hooks.json` |
@@ -83,24 +83,24 @@ Run from a normal shell (**not** inside an active `agy` session, since `agy` may
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.sh)
 ```
 
 **Windows PowerShell:**
 ```powershell
-irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex
 ```
 
 **Windows CMD:**
 ```cmd
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/scripts/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex"
 ```
 
 ### Install From a Local Clone
 
 ```bash
-git clone https://github.com/kid0114/agy-hud-kk.git
-cd agy-hud-kk
+git clone https://github.com/kid0114/agy-check.git
+cd agy-check
 agy plugin install .
 node scripts/bootstrap.js
 ```
@@ -199,12 +199,12 @@ npm test
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/uninstall.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.sh)
 ```
 
 **Windows PowerShell:**
 ```powershell
-irm https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.ps1 | iex
 ```
 
 This cleanly removes `statusLine` from `settings.json`, removes `agy-hud-invocation-timer` from `hooks.json` (leaving other hooks untouched), deletes `agy-hud-runtime` and caches, and uninstalls the plugin.

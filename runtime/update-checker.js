@@ -5,7 +5,7 @@ const https = require('https');
 const path = require('path');
 const { resolveAntigravityPath } = require('./paths.js');
 
-const REMOTE_PKG_URL = 'https://raw.githubusercontent.com/kid0114/agy-hud-kk/main/package.json';
+const REMOTE_PKG_URL = 'https://raw.githubusercontent.com/kid0114/agy-check/main/package.json';
 const STATUS_FILE = resolveAntigravityPath('agy-hud-update-status.json');
 
 function fetchRemoteVersion() {
