@@ -155,23 +155,79 @@ async function getQuota(options = {}) {
   return [];
 }
 
+/**
+ * Proactively refresh quota, tier, and account email for the current live token.
+ * Used by both `--refresh` background jobs and the multi-session panel.
+ */
+async function refreshQuotaNow(options = {}) {
+  const {
+    platform = process.platform,
+    roots = getAntigravityRoots(),
+    tokenReader = readToken,
+    quotaFetcher = fetchQuotaFromCloud,
+    tierFetcher = fetchTierFromCloud,
+    emailFetcher = fetchAccountEmail,
+    cacheWriter = writeCache,
+  } = options;
+
+  try {
+    const tok = tokenReader({ platform, roots });
+    if (!tok) {
+      return { ok: false, reason: 'not_logged_in', email: null, tier: null, data: [] };
+    }
+    if (isTokenExpired(tok)) {
+      return { ok: false, reason: 'expired_token', email: tok.email || null, tier: null, data: [] };
+    }
+
+    const [fresh, tier, fetchedEmail] = await Promise.all([
+      quotaFetcher(tok.accessToken),
+      tierFetcher(tok.accessToken).catch(() => null),
+      emailFetcher(tok.accessToken).catch(() => null),
+    ]);
+    const accountEmail = fetchedEmail || tok.email || null;
+
+    if (fresh && fresh.unavailableReason === 'auth_failed') {
+      tokenMod.clearTokenTemp(roots);
+      return { ok: false, reason: 'auth_failed', email: accountEmail, tier: tier || null, data: [] };
+    }
+
+    if ((Array.isArray(fresh) && fresh.length > 0) || accountEmail) {
+      const normalizedFresh = Array.isArray(fresh) ? fresh : [];
+      cacheWriter(normalizedFresh, tok, tier, accountEmail, normalizedFresh.providerQuota);
+      return {
+        ok: true,
+        reason: null,
+        email: accountEmail,
+        tier: tier || null,
+        data: normalizedFresh,
+        providerQuota: normalizedFresh.providerQuota || null,
+        lastRefreshed: Date.now(),
+      };
+    }
+
+    return {
+      ok: false,
+      reason: (fresh && fresh.unavailableReason) || 'empty_quota',
+      email: accountEmail,
+      tier: tier || null,
+      data: [],
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err && err.message ? err.message : 'refresh_failed',
+      email: null,
+      tier: null,
+      data: [],
+    };
+  }
+}
+
 // ─── CLI Execution for background refreshes ──────────────────────────────────
 if (process.argv.includes('--refresh')) {
   (async () => {
     try {
-      const tok = readToken();
-      if (tok) {
-        const [fresh, tier, accountEmail] = await Promise.all([
-          fetchQuotaFromCloud(tok.accessToken),
-          fetchTierFromCloud(tok.accessToken),
-          fetchAccountEmail(tok.accessToken),
-        ]);
-        if (fresh && fresh.unavailableReason === 'auth_failed') {
-          tokenMod.clearTokenTemp();
-        } else if (fresh.length > 0 || accountEmail) {
-          writeCache(fresh, tok, tier, accountEmail, fresh.providerQuota);
-        }
-      }
+      await refreshQuotaNow();
     } catch {}
     process.exit(0);
   })();
@@ -180,8 +236,14 @@ if (process.argv.includes('--refresh')) {
 module.exports = {
   // orchestrator
   getQuota,
+  refreshQuotaNow,
   // cache module
   CACHE_PATH,
+  ACCOUNT_QUOTA_STORE_PATH: cacheMod.ACCOUNT_QUOTA_STORE_PATH,
+  getAccountQuotaStorePath: cacheMod.getAccountQuotaStorePath,
+  readAccountQuotaStore: cacheMod.readAccountQuotaStore,
+  writeAccountQuotaSnapshot: cacheMod.writeAccountQuotaSnapshot,
+  getAccountQuota: cacheMod.getAccountQuota,
   isCachePayloadFresh,
   readCache: cacheMod.readCache,
   writeCache,

@@ -251,6 +251,49 @@ function configureTimerHooks(baseDir = __dirname, options = {}) {
   return { hooksPath, changed, timerScriptPath };
 }
 
+function buildCheckAgyHookConfig(hookScriptPath, nodePath = process.execPath || 'node') {
+  return {
+    PreInvocation: [
+      {
+        type: 'command',
+        command: `"${nodePath}" "${hookScriptPath}"`,
+        timeout: 15,
+      },
+    ],
+  };
+}
+
+function configureCheckAgyHook(baseDir = __dirname, options = {}) {
+  const hooksPath = getHooksPath(options);
+  const hookScriptPath = path.resolve(baseDir, 'checkagy-hook.js');
+  const nodePath = options.nodePath || process.execPath || 'node';
+  const entry = buildCheckAgyHookConfig(hookScriptPath, nodePath);
+
+  let hooks = {};
+  if (fs.existsSync(hooksPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        hooks = parsed;
+      }
+    } catch {
+      hooks = {};
+    }
+  }
+
+  const prev = JSON.stringify(hooks['agy-check-slash-command'] || null);
+  const next = JSON.stringify(entry);
+  let changed = false;
+  if (prev !== next) {
+    hooks['agy-check-slash-command'] = entry;
+    fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+    fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + '\n', 'utf8');
+    changed = true;
+  }
+
+  return { hooksPath, changed, hookScriptPath };
+}
+
 module.exports = {
   buildCmdShimContents,
   buildShShimContents,
@@ -264,4 +307,6 @@ module.exports = {
   createTimerHookCommand,
   buildTimerHooksConfig,
   configureTimerHooks,
+  buildCheckAgyHookConfig,
+  configureCheckAgyHook,
 };

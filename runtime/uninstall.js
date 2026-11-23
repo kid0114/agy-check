@@ -127,12 +127,16 @@ function clearTimerHooks(hooksPath) {
   } catch {
     return { changed: false, reason: 'parse_error' };
   }
-  if (!hooks || typeof hooks !== 'object' || !Object.hasOwn(hooks, 'agy-hud-invocation-timer')) {
+  const managedKeys = ['agy-hud-invocation-timer', 'agy-check-slash-command'];
+  const presentKeys = managedKeys.filter(k => hooks && typeof hooks === 'object' && Object.hasOwn(hooks, k));
+  if (presentKeys.length === 0) {
     return { changed: false, reason: 'no_timer_hook' };
   }
-  delete hooks['agy-hud-invocation-timer'];
+  for (const key of presentKeys) {
+    delete hooks[key];
+  }
   fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + '\n', 'utf8');
-  return { changed: true };
+  return { changed: true, removed: presentKeys };
 }
 
 function uninstall(options = {}) {

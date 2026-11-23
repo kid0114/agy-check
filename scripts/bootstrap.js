@@ -11,13 +11,20 @@ const DEFAULT_SOURCE_BASE = 'https://raw.githubusercontent.com/kid0114/agy-check
 
 const RUNTIME_FILES = [
   'package.json',
+  'runtime/account-sync.js',
   'runtime/agy-hud.config.json',
+  'runtime/bin/agy-check.js',
   'runtime/bin/agy-hud.js',
+  'runtime/checkagy-hook.js',
   'runtime/config.js',
   'runtime/cost.js',
   'runtime/daily-cost.js',
   'runtime/encoding.js',
   'runtime/invocation-timer.js',
+  'runtime/panel-cli.js',
+  'runtime/panel-data.js',
+  'runtime/panel-server.js',
+  'runtime/panel-ui.js',
   'runtime/parser.js',
   'runtime/paths.js',
   'runtime/quota.js',
@@ -29,6 +36,7 @@ const RUNTIME_FILES = [
   'runtime/renderer/format.js',
   'runtime/renderer/lang.js',
   'runtime/renderer/quota-render.js',
+  'runtime/session-snapshot.js',
   'runtime/speed.js',
   'runtime/statusline-installer.js',
   'runtime/uninstall.js',
@@ -235,7 +243,7 @@ async function installRuntime(options = {}) {
 
   const installerPath = path.join(runtimeDir, 'runtime', 'statusline-installer.js');
   delete require.cache[require.resolve(installerPath)];
-  const { configureStatusLine, configureTimerHooks } = require(installerPath);
+  const { configureStatusLine, configureTimerHooks, configureCheckAgyHook } = require(installerPath);
   const result = configureStatusLine(path.join(runtimeDir, 'runtime'), {
     settingsPath: path.join(antigravityRoot, 'settings.json'),
   });
@@ -243,6 +251,23 @@ async function installRuntime(options = {}) {
     homeDir,
     env,
   });
+  const checkAgyHookResult = configureCheckAgyHook(path.join(runtimeDir, 'runtime'), {
+    homeDir,
+    env,
+  });
+
+  // Install /checkagy skill into global Antigravity skills dir so `/checkagy`
+  // appears in the interactive slash-command autocomplete menu.
+  let checkAgySkillPath = null;
+  try {
+    const skillBody = await readRuntimeFile('skills/checkagy/SKILL.md', { sourceDir, sourceBase });
+    checkAgySkillPath = path.join(homeDir, '.gemini', 'config', 'skills', 'checkagy', 'SKILL.md');
+    fs.mkdirSync(path.dirname(checkAgySkillPath), { recursive: true });
+    fs.writeFileSync(checkAgySkillPath, skillBody);
+  } catch {
+    checkAgySkillPath = null;
+  }
+
   const quotaRefresh = await refreshQuotaCache(runtimeDir, { env, homeDir, platform: options.platform, keyringReader: options.keyringReader });
 
   return {
@@ -251,6 +276,8 @@ async function installRuntime(options = {}) {
     settingsPath: result.settingsPath,
     command: result.command,
     hooksPath: hooksResult.hooksPath,
+    checkAgyHookPath: checkAgyHookResult.hookScriptPath,
+    checkAgySkillPath,
     files: RUNTIME_FILES,
     stalePluginFiles,
     quotaRefresh,

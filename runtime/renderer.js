@@ -254,6 +254,13 @@ function renderHUD(state, agyData, config, quotaData, tierName, updateInfo) {
     }
   }
 
+  if (state?.accountDrift) {
+    const warnIcon = unicode ? '⚠ ' : '[!] ';
+    const targetEmail = sanitizeTerminalText(state.accountDrift.activeEmail || '', 40);
+    const driftText = targetEmail ? `${warnIcon}acct unsynced (keychain: ${targetEmail})` : `${warnIcon}acct unsynced`;
+    line1Parts.push(`${yellow}${bold}${driftText}${reset}`);
+  }
+
   if (updateInfo && updateInfo.updateAvailable) {
     const updateIcon = unicode ? '⟳' : '[UP]';
     line1Parts.push(`${yellow}${updateIcon} v${updateInfo.latestVersion}${reset}`);

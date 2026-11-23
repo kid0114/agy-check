@@ -28,7 +28,9 @@
     "bootstrap": "node scripts/bootstrap.js",
     "verify": "node scripts/verify-display.js",
     "diagnose": "node scripts/diagnose-auth.js",
-    "config": "node runtime/bin/agy-hud.js --config"
+    "config": "node runtime/bin/agy-hud.js --config",
+    "panel": "node runtime/bin/agy-check.js panel",
+    "ls": "node runtime/bin/agy-check.js ls"
   },
   "keywords": [
     "antigravity",

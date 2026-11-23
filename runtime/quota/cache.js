@@ -7,7 +7,11 @@ const { resolveAntigravityPath } = require('../paths.js');
 const { mergeQuotaWindows } = require('./models.js');
 
 const CACHE_PATH = resolveAntigravityPath('agy-hud-quota-cache.json');
+const ACCOUNT_QUOTA_STORE_PATH = path.join(path.dirname(CACHE_PATH), 'agy-hud-accounts-quota.json');
 const CACHE_VERSION = 3;
+const ACCOUNT_STORE_VERSION = 1;
+const MAX_STORED_ACCOUNTS = 20;
+const ACCOUNT_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function isCachePayloadFresh(raw) {
   return raw &&
@@ -199,6 +203,82 @@ function writeCache(data, tokenOrAccessToken, tier = null, accountEmail = null, 
   } catch {
     try { fs.unlinkSync(`${CACHE_PATH}.tmp.${process.pid}`); } catch {}
   }
+
+  if (resolvedEmail) {
+    writeAccountQuotaSnapshot(resolvedEmail, {
+      email: resolvedEmail,
+      tier: resolvedTier,
+      lastRefreshed: now,
+      expiresAt,
+      providerQuota: resolvedProviderQuota,
+      data: merged,
+    });
+  }
+}
+
+function getAccountQuotaStorePath(rootDir = null) {
+  if (rootDir) return path.join(rootDir, 'agy-hud-accounts-quota.json');
+  return ACCOUNT_QUOTA_STORE_PATH;
+}
+
+function readAccountQuotaStore(storePath = ACCOUNT_QUOTA_STORE_PATH) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    if (!raw || raw.version !== ACCOUNT_STORE_VERSION || !raw.accounts || typeof raw.accounts !== 'object') {
+      return { version: ACCOUNT_STORE_VERSION, activeEmail: null, updatedAt: 0, accounts: {} };
+    }
+    return raw;
+  } catch {
+    return { version: ACCOUNT_STORE_VERSION, activeEmail: null, updatedAt: 0, accounts: {} };
+  }
+}
+
+function writeAccountQuotaSnapshot(email, entry, storePath = ACCOUNT_QUOTA_STORE_PATH) {
+  if (!email || typeof email !== 'string' || !entry || typeof entry !== 'object') return false;
+  const now = Date.now();
+  const store = readAccountQuotaStore(storePath);
+  const existing = store.accounts[email] && typeof store.accounts[email] === 'object'
+    ? store.accounts[email]
+    : null;
+
+  const mergedProviderQuota = entry.providerQuota
+    ? (existing?.providerQuota ? { ...existing.providerQuota, ...entry.providerQuota } : entry.providerQuota)
+    : (existing?.providerQuota || null);
+
+  store.accounts[email] = {
+    email,
+    tier: entry.tier || existing?.tier || null,
+    lastRefreshed: typeof entry.lastRefreshed === 'number' ? entry.lastRefreshed : now,
+    expiresAt: typeof entry.expiresAt === 'number' ? entry.expiresAt : (now + 2 * 60 * 1000),
+    providerQuota: mergedProviderQuota,
+    data: Array.isArray(entry.data) ? entry.data : (existing?.data || []),
+  };
+  store.activeEmail = email;
+  store.updatedAt = now;
+
+  // Prune stale or excess accounts beyond retention bounds.
+  const entries = Object.entries(store.accounts)
+    .filter(([, val]) => val && typeof val.lastRefreshed === 'number' && (now - val.lastRefreshed) <= ACCOUNT_SNAPSHOT_MAX_AGE_MS)
+    .sort((a, b) => (b[1].lastRefreshed || 0) - (a[1].lastRefreshed || 0))
+    .slice(0, MAX_STORED_ACCOUNTS);
+  store.accounts = Object.fromEntries(entries);
+
+  const tmpPath = `${storePath}.tmp.${process.pid}.${now}`;
+  try {
+    fs.mkdirSync(path.dirname(storePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2), { mode: 0o600 });
+    fs.renameSync(tmpPath, storePath);
+    return true;
+  } catch {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    return false;
+  }
+}
+
+function getAccountQuota(email, storePath = ACCOUNT_QUOTA_STORE_PATH) {
+  if (!email || typeof email !== 'string') return null;
+  const store = readAccountQuotaStore(storePath);
+  return store.accounts[email] || null;
 }
 
 /**
@@ -289,6 +369,12 @@ function readCacheFallback() {
 module.exports = {
   CACHE_PATH,
   CACHE_VERSION,
+  ACCOUNT_QUOTA_STORE_PATH,
+  ACCOUNT_STORE_VERSION,
+  getAccountQuotaStorePath,
+  readAccountQuotaStore,
+  writeAccountQuotaSnapshot,
+  getAccountQuota,
   isCachePayloadFresh,
   hashCacheKey,
   getTokenCacheIdentity,

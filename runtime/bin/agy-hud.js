@@ -8,9 +8,19 @@ const { spawn } = require('child_process');
 const { getSessionState, parseAgyInput, parseAgyQuota } = require('../parser.js');
 const { renderHUD } = require('../renderer.js');
 const { loadConfig } = require('../config.js');
-const { getQuota, getCachedTier, readToken } = require('../quota.js');
+const { getQuota, getCachedTier, getCachedAccountEmail, readToken } = require('../quota.js');
 const { enrichModelsWithQuotaSummary } = require('../quota/cloud.js');
 const { resolveAntigravityPath } = require('../paths.js');
+const { calculateTurnCacheMetrics } = require('../renderer/format.js');
+const { getSessionCostUsd } = require('../cost.js');
+const { getOutputSpeedDetails, getToolTimeDetails } = require('../speed.js');
+const {
+  readSessionSnapshot,
+  findAncestorAgyProcess,
+  evaluateAccountDrift,
+  writeSessionSnapshot,
+} = require('../session-snapshot.js');
+const { inspectLiveAuth } = require('../account-sync.js');
 
 async function handleSelfUpdate() {
   console.log('Checking for latest installer...');
@@ -90,6 +100,13 @@ async function main() {
     return;
   }
 
+  if (process.argv.includes('--panel') || process.argv.includes('--ls')) {
+    const { runPanelCli } = require('../panel-cli.js');
+    const args = process.argv.slice(2).map(a => (a === '--panel' ? 'panel' : a === '--ls' ? 'ls' : a));
+    await runPanelCli(args);
+    return;
+  }
+
   const stdinData = [];
   let hasHandled = false;
 
@@ -115,12 +132,13 @@ async function main() {
     // Note: agy may pass a legacy ~/.gemini/antigravity/brain/<id>/... path that does not exist
     // on disk (actual data lives under antigravity-cli/brain/<id>/...), and may send session_id
     // instead of conversation_id, so extract the UUID from any of these sources.
+    const uuidMatch = typeof agyData?.transcript_path === 'string'
+      ? agyData.transcript_path.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+      : null;
+    const convId = String(agyData?.conversation_id || agyData?.session_id || (uuidMatch ? uuidMatch[1] : '') || '').trim();
+
     let transcriptPath = agyData?.transcript_path;
     if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      const uuidMatch = typeof transcriptPath === 'string'
-        ? transcriptPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
-        : null;
-      const convId = String(agyData?.conversation_id || agyData?.session_id || (uuidMatch ? uuidMatch[1] : '') || '').trim();
       if (convId) {
         const candidate = resolveAntigravityPath(path.join(
           'brain',
@@ -144,17 +162,38 @@ async function main() {
         }
       } catch {}
 
+      const liveToken = readToken({ skipWindowsCredential: process.platform === 'win32' });
+      const liveAuth = inspectLiveAuth({
+        tokenReader: () => liveToken,
+        persistState: Boolean(convId),
+      });
+      const agyProcess = convId ? findAncestorAgyProcess() : null;
+      const existingSnapshot = convId ? readSessionSnapshot(convId) : null;
+      const activeEmail = liveAuth.activeEmail || (liveToken ? (liveToken.email || getCachedAccountEmail(liveToken)) : null);
+      const { drift: accountDrift } = evaluateAccountDrift({
+        existingSnapshot,
+        agyProcess,
+        activeEmail,
+        accountSwitchedAt: liveAuth.switchedAt,
+      });
+
       const [state, config, quotaData, tierName] = await Promise.all([
         getSessionState(transcriptPath, targetCwd),
         loadConfig(),
         getQuota({ fast: true }).catch(() => []),
-        Promise.resolve().then(() => getCachedTier(readToken({ skipWindowsCredential: process.platform === 'win32' }))),
+        Promise.resolve().then(() => getCachedTier(liveToken)),
       ]);
 
+      if (accountDrift) {
+        state.accountDrift = accountDrift;
+      }
+
       let effectiveQuotaData = quotaData;
-      // Authoritative live quota passed directly in stdin by agy CLI
+      // Authoritative live quota passed directly in stdin by agy CLI —
+      // skip overlaying when this agy process is bound to an older account than
+      // macOS Keychain so stale-session quota cannot clobber the active account.
       const stdinProviderQuota = parseAgyQuota(agyData?.quota);
-      if (stdinProviderQuota) {
+      if (stdinProviderQuota && !accountDrift) {
         if (Array.isArray(effectiveQuotaData)) {
           effectiveQuotaData = enrichModelsWithQuotaSummary(effectiveQuotaData, stdinProviderQuota);
           effectiveQuotaData.providerQuota = { ...(quotaData.providerQuota || {}), ...stdinProviderQuota };
@@ -163,6 +202,47 @@ async function main() {
 
       const hudOutput = renderHUD(state, agyData, config, effectiveQuotaData, tierName, updateInfo);
       process.stdout.write(hudOutput);
+
+      // Persist lightweight per-session snapshot for the multi-session panel.
+      if (convId) {
+        try {
+          const cw = agyData?.context_window || {};
+          const turnUsage = cw.current_usage || state?.usage?.current_usage || null;
+          const turnCache = turnUsage ? calculateTurnCacheMetrics(turnUsage) : null;
+          const speed = getOutputSpeedDetails(agyData, null, state);
+          const toolTime = getToolTimeDetails(agyData, null, state);
+          const costUsd = getSessionCostUsd(agyData, state, { allowRoutedCost: config?.display?.showRoutedCost });
+
+          writeSessionSnapshot({
+            conversationId: convId,
+            transcriptPath: state.transcriptPath || transcriptPath || null,
+            cwd: targetCwd,
+            currentDir: state.currentDir,
+            branch: state.branch,
+            modelId: agyData?.model?.id || null,
+            modelDisplayName: agyData?.model?.display_name || agyData?.model?.id || null,
+            planTier: tierName || agyData?.plan_tier || null,
+            activeAccountEmail: activeEmail,
+            agyProcess,
+            contextWindow: (cw && (cw.used_percentage !== undefined || cw.context_window_size))
+              ? {
+                  usedPercentage: cw.used_percentage ?? null,
+                  contextWindowSize: cw.context_window_size ?? null,
+                  totalInputTokens: cw.total_input_tokens ?? null,
+                  totalOutputTokens: cw.total_output_tokens ?? null,
+                }
+              : null,
+            turnCache,
+            sessionCache: state.sessionCache || null,
+            speed,
+            toolTime,
+            costUsd,
+            steps: state.steps,
+          }, { accountSwitchedAt: liveAuth.switchedAt });
+        } catch {
+          // Non-blocking snapshot write
+        }
+      }
 
       // Trigger background check for updates after writing output
       maybeCheckUpdates();
