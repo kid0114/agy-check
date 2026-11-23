@@ -2,15 +2,165 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Enhanced real-time statusline HUD for Antigravity CLI (`agy`)** — built on top of [`icebear0828/agy-hud`](https://github.com/icebear0828/agy-hud) (MIT) with hook-timed dual output speed (`out` + `net≈`), cumulative tool execution time (`tooltime`), accurate per-turn & session-average prompt cache hit rate (`cache ... avg ...`), and multi-account quota cache isolation.
+A real-time status line and a multi-session dashboard for the Antigravity CLI (`agy`). It shows cache hit rate, output speed, tool time, context use, remaining quota and estimated cost, either for the session you are in or for every session at once.
 
 [中文文档](./README_zh.md)
 
+![agy-check dashboard](./assets/panel-overview.png)
+
+<sub>All screenshots use synthetic demo data.</sub>
+
 ---
 
-## Preview
+## What you get
 
-![agy-check demo](./assets/demo.png)
+| Part | Where | What it shows |
+|---|---|---|
+| **Status line** | Bottom of every `agy` session | Output speed (`out` / `net≈`), tool time, per-turn and session cache hit rate, context window, 5-hour and weekly quota |
+| **Dashboard** | `/checkagy` inside `agy`, or `agy-check panel` | Every session in one live page: cache efficiency, speed, tokens, quota per account, estimated cost per time range, and why individual turns missed the cache |
+| **CLI** | `agy-check ls` / `session` / `sync` | The same data as plain-text tables |
+
+Everything runs locally from files `agy` already writes. There are no runtime dependencies and no telemetry, and the dashboard only listens on `127.0.0.1`.
+
+---
+
+## Install
+
+Run these from a normal shell, **not** inside an active `agy` session (`agy` may rewrite `settings.json` from memory when it exits).
+
+**macOS / Linux**
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.sh)
+```
+
+**Windows PowerShell**
+```powershell
+irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex
+```
+
+**Windows CMD**
+```cmd
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex"
+```
+
+**From a local clone**
+```bash
+git clone https://github.com/kid0114/agy-check.git
+cd agy-check
+agy plugin install .
+node scripts/bootstrap.js
+```
+
+The installer:
+
+1. Installs the plugin (`plugin.json` and the `/hud-config` skill) with `agy plugin install`.
+2. Copies the runtime to `~/.gemini/antigravity-cli/agy-hud-runtime/`.
+3. Sets `statusLine.command` in `~/.gemini/antigravity-cli/settings.json`.
+4. Adds the `agy-hud-invocation-timer` hooks (`PreInvocation`, `PostToolUse`, `PostInvocation`) to `~/.gemini/config/hooks.json`, keeping any hooks you already have. These power `out`, `net≈` and `tooltime`.
+5. Adds the `agy-check-slash-command` `PreInvocation` hook and the `/checkagy` skill (`~/.gemini/config/skills/checkagy/SKILL.md`).
+
+Running it again is safe and updates or repairs the setup. Open a new `agy` session to see the status line.
+
+---
+
+## Dashboard
+
+Inside `agy`, type:
+
+```text
+/checkagy
+```
+
+A hook answers `/checkagy` before any model call, so it costs no tokens. It starts the dashboard in the background, or reuses one that is already running, and opens `http://127.0.0.1:18721`.
+
+| Command | What it does |
+|---|---|
+| `/checkagy` or `/checkagy panel` | Start or reuse the dashboard and open it in your browser |
+| `/checkagy ls [active\|24h\|today\|7d\|30d\|all]` | Print the session table in the chat |
+| `/checkagy session [id]` | Per-turn cache detail for one session (defaults to the current one) |
+| `/checkagy refresh` | Refresh quota, then print the session table |
+| `/checkagy sync [--apply]` | Preview the account sync, or run it with `--apply` |
+| `/checkagy stop` | Stop the background dashboard |
+
+### What's on the page
+
+- **Time range** (Active, 24h, Today, 7d, 30d, All) drives every number on the page, including the cost shown in the top bar.
+- **Summary**: weighted cache hit rate, session count, average output speed, tokens, and estimated API cost with Today / 7 days / 30 days / This month alongside.
+- **Quota**: 5-hour and weekly remaining for the Gemini and third-party (3P) allowances, with reset times. With more than one account, each account gets its own row.
+- **Models**: sessions, turns, input tokens, cost and cache hit rate per model.
+- **Sessions**: status, title, directory and branch, model, turns and cache misses, hit rate (session and last turn), tokens, context use, speed, tool and API time, and cost. Click a column header to sort. You can also search, filter by account, and show empty sessions.
+- **Session detail**: click a row to open it. `↑` / `↓` move between sessions and `Esc` closes the panel.
+
+![Session detail](./assets/panel-session-detail.png)
+
+The page updates by itself through Server-Sent Events whenever an `agy` transcript changes, so numbers move within about a second of each completed turn. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order and column toggles are remembered in the browser.
+
+### Why a turn missed the cache
+
+A turn is flagged when its hit rate is below 50%, or when it fell 25 points or more from the previous turn and is below 80%. The detail panel then names the likely cause:
+
+| Diagnosis | Rule |
+|---|---|
+| Model switch | The model differs from the previous turn's |
+| Idle gap (TTL) | 5 minutes or more passed since the previous turn |
+| Context drop | The prompt is more than 25% smaller than the previous turn's (compaction or reset) |
+| Prefix change / eviction | None of the above |
+
+### Estimated cost
+
+Each turn is priced at the list rate in effect when it ran:
+
+$$\text{cost} = \text{uncached input} \times r_\text{in} + \text{cache reads} \times r_\text{cache} + \text{cache writes} \times r_\text{write} + \text{output (incl. thinking)} \times r_\text{out}$$
+
+`agy` serves every model through Antigravity, so the rates are Google's: the Gemini API paid tier for Gemini models, and Google Cloud's partner-model rates for third-party models such as Opus. Prices per million tokens, global region, last checked 2026-11-23:
+
+| Model | Input | Cached input | Output | Cache write |
+|---|---|---|---|---|
+| Gemini 4 Neon | $3.00 | $0.15 | $15.00 | – |
+| Gemini 4 Hydrogen | $1.50 | $0.075 | $7.50 | – |
+| Gemini 4 Carbon / Argon | $2.00, then $4.00 from 2026-12-01 | $0.10, then $0.20 | $10.00, then $20.00 | – |
+| Gemini 3.8 Flash | $0.75, then $1.50 from 2027-01-01 | $0.075, then $0.15 | $3.75, then $7.50 | – |
+| Opus 5.5 | $4.00 | $0.20 | $20.00 | $5.00 |
+| Sonnet 5.5 | $2.00 | $0.10 | $10.00 | $2.50 |
+
+- Scheduled price changes take effect at midnight Pacific time.
+- Older model families use the legacy rates kept in [`runtime/cost.js`](./runtime/cost.js), which is also the place to update prices.
+- A model with no known price is shown as **unpriced** and left out of totals. It is never counted as free.
+- The 24h, 7d and 30d ranges are rolling windows, and Today and This month use your local calendar. These ranges only count turns inside the window. Active and All count whole sessions.
+- These figures are what the tokens would cost at API prices. Usage covered by an Antigravity membership is not billed per token.
+
+### CLI
+
+The CLI lives in the installed runtime. Put it on your `PATH` once:
+
+```bash
+ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.local/bin/agy-check
+```
+
+```text
+agy-check panel [--port 18721] [--daemon] [--open]   Start the dashboard (127.0.0.1)
+agy-check panel stop                                 Stop the background dashboard
+agy-check ls [--range 24h] [--sort recent]           Print the session table
+   [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
+agy-check session <id-prefix> [--json]               Per-turn cache hit rate and miss diagnosis
+agy-check sync [--apply]                             Preview (default) or run the account sync
+agy-check config                                     Status line configuration wizard
+agy-check update                                     Update the runtime
+```
+
+---
+
+## Accounts and account sync
+
+- Quota is saved per account every time it is refreshed while that account is logged in. With two accounts, the Quota card lists both. The one you are not logged into shows its last saved values and how old they are. Only the logged-in account has live quota, because `agy` keeps a single login in the macOS Keychain.
+- After you switch accounts, `agy` windows that were already open keep the old login in memory. They keep using the old account and can write it back into the Keychain. agy-check marks those sessions **unsynced** in the dashboard, the CLI and their own status line, and shows a banner.
+- **Sync sessions** (optional) hands this situation to a script you provide. agy-check runs it with `--dry-run` to show a preview, and runs it for real only after you confirm. The script path comes from `AGY_SYNC_SCRIPT`, or defaults to `~/tool-scripts/agy/agy-sync-keychain.sh`. The script is not part of this repository, and the button stays hidden when it is missing. A typical script stops the other interactive `agy` windows and reopens their conversations in new terminal tabs. Check what yours does before you confirm.
+
+---
+
+## Status line
+
+![Status line](./assets/demo.png)
 
 ```text
 user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI Ultra │ out: 68.5 (net≈24.1) tok/s │ tooltime: 3m30s
@@ -21,112 +171,65 @@ user@gmail.com │ project │ ⎇ main │ Gemini 4 Neon (XHigh) │ Google AI 
   Google week [█████░]  83% ~4d19h │ Claude week [██████]  98% ~5d21h
 ```
 
----
-
-## What's Enhanced Over Upstream `agy-hud`
+Compared with upstream [`agy-hud`](https://github.com/icebear0828/agy-hud):
 
 | Capability | Upstream `agy-hud` | `agy-check` |
 |---|---|---|
-| **Output speed (`out` / `net≈`)** | Total `tok/s` from coarse fallback or cost duration | Hook-timed model duration excluding tool time (`PreInvocation` / `PostToolUse` / `PostInvocation`), showing both total speed (with thinking) and visible net speed `net≈` |
-| **Tool execution time (`tooltime`)** | Not available | Cumulative tool runtime across the session, automatically wired via `~/.gemini/config/hooks.json` |
-| **Prompt cache hit rate (`cache`)** | Opt-in; heuristic miscounted turns where `input_tokens >= cache_read`; 0% turns could be hidden or masked by cache smoothing | Enabled by default; exact `agy` incremental denominator `input + cache_read + cache_write`, honest `0.0%` cold-cache reporting, plus whole-session cumulative `avg XX.X%` |
-| **Transcript path & schema parsing** | Failed when `agy` passed legacy `~/.gemini/antigravity/brain/...` paths or top-level `PLANNER_RESPONSE` token fields | Auto-resolves UUID to `antigravity-cli/brain/<id>/.../transcript.jsonl` and parses native `input_tokens` / `cache_read_tokens` |
-| **Multi-account quota isolation** | Could briefly show previous account's cached tier/quota after switching accounts | Keys quota & tier cache by active account email and triggers immediate refresh on account switch |
+| **Output speed (`out` / `net≈`)** | Total `tok/s` from a coarse fallback or cost duration | Timed by hooks, excluding tool time. Shows both total speed (with thinking) and visible net speed `net≈` |
+| **Tool time (`tooltime`)** | Not available | Total tool runtime for the session, wired through `~/.gemini/config/hooks.json` |
+| **Cache hit rate (`cache`)** | Opt-in. A heuristic miscounted turns where `input_tokens >= cache_read`, and 0% turns could be hidden by smoothing | On by default. Uses agy's exact denominator `input + cache_read + cache_write`, reports cold turns honestly as `0.0%`, and adds a whole-session `avg` |
+| **Transcript parsing** | Failed on legacy `~/.gemini/antigravity/brain/...` paths and top-level `PLANNER_RESPONSE` token fields | Resolves the conversation UUID to `antigravity-cli/brain/<id>/.../transcript.jsonl` and reads the native token fields |
+| **Account switching** | Could briefly show the previous account's tier and quota | Caches quota and tier per account email and refreshes immediately after a switch |
 
----
+### How each metric is calculated
 
-## How Every Metric Is Calculated
+All values come from `agy`'s status line JSON on stdin, `transcript.jsonl` / `transcript_full.jsonl`, hook timestamps in `~/.gemini/antigravity-cli/speed-cache/hook-timing-<id>.json`, and the Antigravity quota API.
 
-All metrics are derived strictly from live `agy` statusline stdin JSON, `transcript.jsonl` / `transcript_full.jsonl`, hook timestamps (`~/.gemini/antigravity-cli/speed-cache/hook-timing-<id>.json`), and Antigravity quota APIs.
+**Line 1: identity, speed and tool time**
 
-### Line 1 — Identity, Speed & Tool Time
-
-| Item | Display Example | Data Source & Exact Formula |
+| Item | Example | Source and formula |
 |---|---|---|
-| **Account** | `user@gmail.com` | Resolved in priority order: live OAuth token's cached userinfo email → `~/.gemini/google_accounts.json` → `~/.gemini/oauth_creds.json` JWT payload (display-only) → OS username. Controlled by `display.showUsername`. |
-| **Workspace** | `lny` | `path.basename(agyData.workspace.current_dir \|\| cwd)`. Controlled by `display.showCurrentDir`. |
-| **Git Branch** | `⎇ main` | `git rev-parse --abbrev-ref HEAD` executed in workspace directory. Controlled by `display.showGitBranch`. |
-| **Model** | `Gemini 4 Neon (XHigh)` | `agyData.model.display_name \|\| agyData.model.id`, abbreviated for common `Gemini` / `Claude` / `GPT-OSS` names. |
-| **Plan Tier** | `Google AI Ultra` | Account tier from `loadCodeAssist` cached against the active account email (never leaks across account switches), falling back to `agyData.plan_tier \|\| 'Free'`. |
-| **Total Output Speed (`out`)** | `out: 68.5 tok/s` | $$\text{out} = \frac{\Delta \text{total\_output\_tokens}}{\Delta t_{\text{model}}}$$ where $\Delta t_{\text{model}} = t_{\text{invocation}} - t_{\text{tool}}$ is measured by `invocation-timer.js` hooks (subtracting tool runtime from wall-clock invocation time). Includes thinking tokens. Readings below `500 ms` are ignored as noise and the last valid reading is held until the next response. |
-| **Visible Net Speed (`net≈`)** | `(net≈24.1)` | $$\text{net} \approx \frac{\min(\Delta \text{total\_output\_tokens},\; \Delta \text{visible\_tokens})}{\Delta t_{\text{model}}}$$ Visible tokens (excluding hidden `thinking`) are estimated from `PLANNER_RESPONSE.content` and `tool_calls` in `transcript_full.jsonl` using $\text{CJK chars} \times 0.9 + \text{other chars} \times 0.26$, capped per step by `entry.output_tokens`. |
-| **Tool Time (`tooltime`)** | `tooltime: 3m30s` | Accumulated across all invocations in the session. For each invocation with `PostToolUse` markers, `resolveToolWindowMs()` pairs the earliest tracked tool step's `created_at + 500ms` (midpoint compensation for 1-second floor timestamps in `transcript.jsonl`) with the latest `PostToolUse` completion timestamp, clamped to `[invocationStart, invocationEnd]`. |
+| **Account** | `user@gmail.com` | First match of: the live OAuth token's cached userinfo email, `~/.gemini/google_accounts.json`, the JWT payload in `~/.gemini/oauth_creds.json` (display only), then the OS username. Toggle with `display.showUsername`. |
+| **Workspace** | `project` | `path.basename(agyData.workspace.current_dir \|\| cwd)`. Toggle with `display.showCurrentDir`. |
+| **Git branch** | `⎇ main` | `git rev-parse --abbrev-ref HEAD` in the workspace. Toggle with `display.showGitBranch`. |
+| **Model** | `Gemini 4 Neon (XHigh)` | `agyData.model.display_name \|\| agyData.model.id`, shortened for common Gemini, Claude and GPT-OSS names. |
+| **Plan tier** | `Google AI Ultra` | Tier from `loadCodeAssist`, cached per account email, falling back to `agyData.plan_tier \|\| 'Free'`. |
+| **Output speed (`out`)** | `out: 68.5 tok/s` | $$\text{out} = \frac{\Delta \text{total\_output\_tokens}}{\Delta t_{\text{model}}}$$ where $\Delta t_{\text{model}}$ is the invocation time measured by `invocation-timer.js` hooks minus tool time. Includes thinking tokens. Readings under 500 ms are ignored as noise, and the last valid reading is held until the next response. |
+| **Visible speed (`net≈`)** | `(net≈24.1)` | $$\text{net} \approx \frac{\min(\Delta \text{total\_output\_tokens},\; \Delta \text{visible\_tokens})}{\Delta t_{\text{model}}}$$ Visible tokens (excluding hidden thinking) are estimated from `PLANNER_RESPONSE.content` and `tool_calls` as $\text{CJK chars} \times 0.9 + \text{other chars} \times 0.26$, capped per step by `entry.output_tokens`. |
+| **Tool time (`tooltime`)** | `tooltime: 3m30s` | Summed over the session. For each invocation with `PostToolUse` markers, the window runs from the first tracked tool step's `created_at + 500ms` (compensating for whole-second timestamps) to the last `PostToolUse` completion, clamped to the invocation. |
 
-### Line 2 — Tokens, Cache Hit Rate & Context Window
+**Line 2: tokens, cache hit rate and context window**
 
-| Item | Display Example | Data Source & Exact Formula |
+| Item | Example | Source and formula |
 |---|---|---|
-| **Token Breakdown** | `⚿ Tokens 300.8k (in: 2.5k, out: 78.1k, cache: 220.1k)` | <ul><li>`in`: current turn uncached input `current_usage.input_tokens` (falls back to `max(0, total_input_tokens - cacheTotal)` when `current_usage` is absent).</li><li>`out`: session cumulative output `context_window.total_output_tokens`.</li><li>`cache`: `cache_read_input_tokens + cache_creation_input_tokens` (omitted when `0`).</li><li>`Tokens`: `in + out + cache`.</li></ul> |
-| **Per-Turn Cache Hit Rate** | `cache 98.9% (220.1k/222.7k, ...)` | $$\text{turn\_hit\_rate} = \frac{\text{cache\_read}}{\text{input\_tokens} + \text{cache\_read} + \text{cache\_creation}} \times 100\%$$ **Why input only (not output)?** Prompt / KV caching only reuses input prefixes; model outputs are freshly decoded every turn and cannot hit cache. In `agy` (verified across Gemini and Claude models), `input_tokens` is always uncached incremental input returned by the model backend, so total prompt input is strictly `input + cache_read + cache_write`. Missing `cache_read` on cold turns is treated as `0`, displaying `0.0%` honestly. |
-| **Session Average Cache Hit Rate (`avg`)** | `(..., avg 92.6%)` | $$\text{avg\_hit\_rate} = \frac{\sum \text{cache\_read\_tokens}}{\sum (\text{input\_tokens} + \text{cache\_read\_tokens} + \text{cache\_creation\_tokens})} \times 100\%$$ Summed over every `PLANNER_RESPONSE` entry in the session's `transcript.jsonl` (reflects cold starts, model switches, and TTL expirations). Shown once the session has $\ge 2$ turns; can be disabled via `display.showSessionCacheHitRate: false`. |
-| **Cache Color Temperature** | Green / Yellow / Gray | Default thresholds (`display.cacheHitThresholds`): **≥ 80%** bold green, **50%–79.9%** yellow, **0.1%–49.9%** dim yellow, **0%** dim gray. |
-| **Context Window** | `⛁ 200k/1M [██░░░░░░░░] 19%` | Direct values from `context_window.total_input_tokens / context_window.context_window_size` and `context_window.used_percentage`. Progress bar turns yellow above `thresholds.warning` (`70%`) and red above `thresholds.critical` (`90%`). |
+| **Tokens** | `⚿ Tokens 300.8k (in: 2.5k, out: 78.1k, cache: 220.1k)` | `in`: this turn's uncached input (`current_usage.input_tokens`, or `max(0, total_input_tokens - cacheTotal)` when missing). `out`: session output `context_window.total_output_tokens`. `cache`: `cache_read_input_tokens + cache_creation_input_tokens`, hidden when 0. `Tokens`: `in + out + cache`. |
+| **Turn cache hit rate** | `cache 98.9% (220.1k/222.7k, ...)` | $$\frac{\text{cache\_read}}{\text{input\_tokens} + \text{cache\_read} + \text{cache\_creation}} \times 100\%$$ Only input can hit the cache; output is decoded fresh every turn. In `agy`, `input_tokens` is always the uncached part, so the total prompt is `input + cache_read + cache_write`. A missing `cache_read` counts as 0 and shows `0.0%`. |
+| **Session average (`avg`)** | `(..., avg 92.6%)` | $$\frac{\sum \text{cache\_read}}{\sum (\text{input} + \text{cache\_read} + \text{cache\_creation})} \times 100\%$$ over every `PLANNER_RESPONSE` in the session, from the second turn on. Turn off with `display.showSessionCacheHitRate: false`. |
+| **Cache colours** | Green / yellow / grey | `display.cacheHitThresholds` defaults: ≥ 80% bold green, 50–79.9% yellow, 0.1–49.9% dim yellow, 0% dim grey. |
+| **Context window** | `⛁ 200k/1M [██░░░░░░░░] 19%` | `context_window.total_input_tokens / context_window.context_window_size` and `used_percentage`. The bar turns yellow above `thresholds.warning` (70%) and red above `thresholds.critical` (90%). |
 
-### Line 3 — Workspace Metadata (Non-Zero Only)
+**Line 3: workspace files** (shown only when something is found): memory files (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `MEMORY.md`), rule files (`.gemini/rules`, `.claude/rules`, `.cursor/rules`, `.github/rules`), configured MCP servers, and active `.git/hooks` scripts.
 
-Scans the current workspace for memory files (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `MEMORY.md`), rule markdown files (`.gemini/rules`, `.claude/rules`, `.cursor/rules`, `.github/rules`), configured MCP servers, and active `.git/hooks` scripts. Omitted completely when all counts are zero.
+**Quota table**
 
-### Quota Table — Provider 5h & Weekly Windows
-
-| Item | Display Example | Data Source & Exact Formula |
+| Item | Example | Source and formula |
 |---|---|---|
-| **Remaining Quota %** | `Google 5h [█████░] 78%` | Live `agy` stdin `quota` map (`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`) merged with cached Antigravity cloud quota (`agy-hud-quota-cache.json`). Percentage uses `floor(remainingFraction * 100)` capped at `99%` whenever `remainingFraction < 1` so partially used windows never appear stuck at `100%`. |
-| **Reset Countdown** | `~1h5m` / `~4d19h` | `max(0, resetTime - now)`, formatted compactly as `Xd` (≥ 10d), `XdYh`, `Xh` (≥ 10h), `XhYm`, `Ym`, or `now`. |
-
----
-
-## Installation & Usage
-
-Run from a normal shell (**not** inside an active `agy` session, since `agy` may flush in-memory `settings.json` on exit).
-
-### One-Command Install
-
-**macOS / Linux:**
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.sh)
-```
-
-**Windows PowerShell:**
-```powershell
-irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex
-```
-
-**Windows CMD:**
-```cmd
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/kid0114/agy-check/main/scripts/install.ps1 | iex"
-```
-
-### Install From a Local Clone
-
-```bash
-git clone https://github.com/kid0114/agy-check.git
-cd agy-check
-agy plugin install .
-node scripts/bootstrap.js
-```
-
-### What the Installer Sets Up
-
-1. Installs the plugin (`plugin.json` + `/hud-config` skill) via `agy plugin install`.
-2. Copies the self-contained runtime to `~/.gemini/antigravity-cli/agy-hud-runtime/`.
-3. Writes `statusLine.command` into `~/.gemini/antigravity-cli/settings.json`.
-4. Registers `agy-hud-invocation-timer` (`PreInvocation`, `PostToolUse`, `PostInvocation`) into `~/.gemini/config/hooks.json` (preserving any existing hooks) so `out` / `net≈` / `tooltime` work automatically.
-
-Re-running the installer is idempotent and safely repairs or updates your setup. Open a new `agy` session to see the HUD.
+| **Remaining %** | `Google 5h [█████░] 78%` | `agy`'s stdin `quota` map (`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`) merged with the cached Antigravity quota (`agy-hud-quota-cache.json`). Uses `floor(remainingFraction × 100)`, capped at 99% while any of the window is used. |
+| **Reset countdown** | `~1h5m` / `~4d19h` | `max(0, resetTime - now)`, shown as `Xd`, `XdYh`, `Xh`, `XhYm`, `Ym` or `now`. |
 
 ---
 
 ## Configuration
 
-Global config path: `~/.gemini/antigravity-cli/agy-hud-runtime/runtime/agy-hud.config.json`
-Project-local override (optional): `./agy-hud.config.json`
+Global config: `~/.gemini/antigravity-cli/agy-hud-runtime/runtime/agy-hud.config.json`
+Per-project override (optional): `./agy-hud.config.json`
 
-Interactive config wizard:
+Interactive wizard:
 ```bash
 node ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-hud.js --config
 ```
 
-Or edit `agy-hud.config.json` directly:
+Or edit the file directly:
 
 ```json
 {
@@ -162,34 +265,49 @@ Or edit `agy-hud.config.json` directly:
 }
 ```
 
-Key `display` options:
-
-| Option | Default | Description |
+| `display` option | Default | Description |
 |---|---|---|
 | `showSpeed` | `true` | Show `out: X.X (net≈Y.Y) tok/s` on line 1 |
-| `showToolTime` | `true` | Show cumulative `tooltime: XmYs` on line 1 |
-| `showTurnCacheHitRate` | `true` | Show `cache XX.X% (read/total)` badge on line 2 |
-| `showSessionCacheHitRate` | `true` | Append session cumulative `, avg YY.Y%` to the cache badge (`turns >= 2`) |
-| `cacheHitThresholds` | `{ "excellent": 80, "partial": 50 }` | Customize cache badge color breakpoints |
-| `cacheSmoothing` | `false` | Legacy opt-in smoothing for older CLI versions; keep `false` to see honest `0.0%` cache misses |
-| `quotaStyle` | `"table"` | `"table"` (Google/Claude 5h + week), `"compact"` (single-line mini bars), or `"models"` (per-model table) |
-| `showUsername` | `true` | Show active account email / OS username |
+| `showToolTime` | `true` | Show `tooltime: XmYs` on line 1 |
+| `showTurnCacheHitRate` | `true` | Show the `cache XX.X% (read/total)` badge on line 2 |
+| `showSessionCacheHitRate` | `true` | Append the session `avg YY.Y%` (from the second turn on) |
+| `cacheHitThresholds` | `{ "excellent": 80, "partial": 50 }` | Colour breakpoints for the cache badge |
+| `cacheSmoothing` | `false` | Legacy smoothing for older CLI versions; keep `false` to see real `0.0%` misses |
+| `quotaStyle` | `"table"` | `"table"` (5h and week per provider), `"compact"` (one line of mini bars) or `"models"` (per-model table) |
+| `showUsername` | `true` | Show the account email or OS username |
 | `useNerdFonts` | `false` | Use Nerd Font glyphs instead of standard Unicode symbols |
-| `showCost` / `showDailyCost` / `showWeeklyCost` | `false` | Show estimated session / daily / weekly USD cost |
+| `showCost` / `showDailyCost` / `showWeeklyCost` | `false` | Show estimated session, daily and weekly cost in the status line |
 
 ---
 
-## Verification & Troubleshooting
+## Data and privacy
+
+agy-check only reads local files that `agy` and its own hooks write:
+
+- `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`: turns, token counts, timestamps.
+- `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts, opened read-only.
+- `~/.gemini/antigravity-cli/speed-cache/` and `sessions/`: hook timings and per-session snapshots written by agy-check.
+- `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
+- The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
+
+The dashboard binds to `127.0.0.1` only, and its two actions (quota refresh and sync) reject cross-origin requests. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
+
+---
+
+## Troubleshooting
 
 ```bash
-# Check statusLine and timing hooks configuration
+# Check the status line and hook configuration
 cat ~/.gemini/antigravity-cli/settings.json | grep -A3 statusLine
 cat ~/.gemini/config/hooks.json
 
-# Test HUD rendering directly
+# Render the status line directly
 node ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-hud.js < /dev/null
 
-# Run unit tests (from repo root)
+# Start the dashboard in the foreground to see its log
+node ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js panel
+
+# Run the unit tests (from the repository root)
 npm test
 ```
 
@@ -197,22 +315,24 @@ npm test
 
 ## Uninstall
 
-**macOS / Linux:**
+Stop the dashboard first if it is running (`/checkagy stop` or `agy-check panel stop`).
+
+**macOS / Linux**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.sh)
 ```
 
-**Windows PowerShell:**
+**Windows PowerShell**
 ```powershell
 irm https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.ps1 | iex
 ```
 
-This cleanly removes `statusLine` from `settings.json`, removes `agy-hud-invocation-timer` from `hooks.json` (leaving other hooks untouched), deletes `agy-hud-runtime` and caches, and uninstalls the plugin.
+This removes `statusLine` from `settings.json`, removes the `agy-hud-invocation-timer` and `agy-check-slash-command` hooks from `hooks.json` (other hooks are left alone), deletes `agy-hud-runtime` and its caches, and uninstalls the plugin. The `/checkagy` skill folder `~/.gemini/config/skills/checkagy/` is not removed; delete it by hand if you no longer want it.
 
 ---
 
-## License & Attribution
+## License and attribution
 
 Licensed under the [MIT License](./LICENSE).
 
-Originally based on [`icebear0828/agy-hud`](https://github.com/icebear0828/agy-hud) (MIT). All upstream credits belong to its authors.
+Originally based on [`icebear0828/agy-hud`](https://github.com/icebear0828/agy-hud) (MIT). All upstream credit belongs to its authors.
