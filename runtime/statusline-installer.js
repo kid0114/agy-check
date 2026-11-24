@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { resolveAntigravityPath } = require('./paths.js');
 
@@ -251,7 +252,7 @@ function configureTimerHooks(baseDir = __dirname, options = {}) {
   return { hooksPath, changed, timerScriptPath };
 }
 
-function buildCheckAgyHookConfig(hookScriptPath, nodePath = process.execPath || 'node') {
+function buildCheckHookConfig(hookScriptPath, nodePath = process.execPath || 'node') {
   return {
     PreInvocation: [
       {
@@ -263,11 +264,11 @@ function buildCheckAgyHookConfig(hookScriptPath, nodePath = process.execPath || 
   };
 }
 
-function configureCheckAgyHook(baseDir = __dirname, options = {}) {
+function configureCheckHook(baseDir = __dirname, options = {}) {
   const hooksPath = getHooksPath(options);
-  const hookScriptPath = path.resolve(baseDir, 'checkagy-hook.js');
+  const hookScriptPath = path.resolve(baseDir, 'check-hook.js');
   const nodePath = options.nodePath || process.execPath || 'node';
-  const entry = buildCheckAgyHookConfig(hookScriptPath, nodePath);
+  const entry = buildCheckHookConfig(hookScriptPath, nodePath);
 
   let hooks = {};
   if (fs.existsSync(hooksPath)) {
@@ -294,6 +295,48 @@ function configureCheckAgyHook(baseDir = __dirname, options = {}) {
   return { hooksPath, changed, hookScriptPath };
 }
 
+// SKILL.md files we install name our hook; a skill without it belongs to the user and is never touched.
+const CHECK_SKILL_MARKER = 'agy-check-slash-command';
+
+function getSkillsDir(options = {}) {
+  return path.join(options.homeDir || os.homedir(), '.gemini', 'config', 'skills');
+}
+
+function removeOwnedSkill(skillDir) {
+  let body = '';
+  try {
+    body = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+  } catch {
+    return false;
+  }
+  if (!body.includes(CHECK_SKILL_MARKER)) return false;
+  fs.rmSync(skillDir, { recursive: true, force: true });
+  return true;
+}
+
+/**
+ * Installs the `/check` skill (slash-menu entry) and retires the old `/checkagy` skill.
+ * Leaves an existing user-owned `check` skill alone and reports it as a conflict.
+ */
+function installCheckSkill(skillBody, options = {}) {
+  const skillsDir = getSkillsDir(options);
+  removeOwnedSkill(path.join(skillsDir, 'checkagy'));
+  const skillPath = path.join(skillsDir, 'check', 'SKILL.md');
+  if (fs.existsSync(skillPath) && !fs.readFileSync(skillPath, 'utf8').includes(CHECK_SKILL_MARKER)) {
+    return { skillPath: null, conflict: skillPath };
+  }
+  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+  fs.writeFileSync(skillPath, skillBody);
+  return { skillPath, conflict: null };
+}
+
+function removeCheckSkills(options = {}) {
+  const skillsDir = getSkillsDir(options);
+  return ['check', 'checkagy']
+    .map(name => path.join(skillsDir, name))
+    .filter(removeOwnedSkill);
+}
+
 module.exports = {
   buildCmdShimContents,
   buildShShimContents,
@@ -307,6 +350,8 @@ module.exports = {
   createTimerHookCommand,
   buildTimerHooksConfig,
   configureTimerHooks,
-  buildCheckAgyHookConfig,
-  configureCheckAgyHook,
+  buildCheckHookConfig,
+  configureCheckHook,
+  installCheckSkill,
+  removeCheckSkills,
 };

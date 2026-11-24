@@ -15,7 +15,7 @@ const RUNTIME_FILES = [
   'runtime/agy-hud.config.json',
   'runtime/bin/agy-check.js',
   'runtime/bin/agy-hud.js',
-  'runtime/checkagy-hook.js',
+  'runtime/check-hook.js',
   'runtime/config.js',
   'runtime/cost.js',
   'runtime/daily-cost.js',
@@ -243,7 +243,7 @@ async function installRuntime(options = {}) {
 
   const installerPath = path.join(runtimeDir, 'runtime', 'statusline-installer.js');
   delete require.cache[require.resolve(installerPath)];
-  const { configureStatusLine, configureTimerHooks, configureCheckAgyHook } = require(installerPath);
+  const { configureStatusLine, configureTimerHooks, configureCheckHook, installCheckSkill } = require(installerPath);
   const result = configureStatusLine(path.join(runtimeDir, 'runtime'), {
     settingsPath: path.join(antigravityRoot, 'settings.json'),
   });
@@ -251,21 +251,19 @@ async function installRuntime(options = {}) {
     homeDir,
     env,
   });
-  const checkAgyHookResult = configureCheckAgyHook(path.join(runtimeDir, 'runtime'), {
+  const checkHookResult = configureCheckHook(path.join(runtimeDir, 'runtime'), {
     homeDir,
     env,
   });
 
-  // Install /checkagy skill into global Antigravity skills dir so `/checkagy`
+  // Install the /check skill into the global Antigravity skills dir so `/check`
   // appears in the interactive slash-command autocomplete menu.
-  let checkAgySkillPath = null;
+  let checkSkill = { skillPath: null, conflict: null };
   try {
-    const skillBody = await readRuntimeFile('skills/checkagy/SKILL.md', { sourceDir, sourceBase });
-    checkAgySkillPath = path.join(homeDir, '.gemini', 'config', 'skills', 'checkagy', 'SKILL.md');
-    fs.mkdirSync(path.dirname(checkAgySkillPath), { recursive: true });
-    fs.writeFileSync(checkAgySkillPath, skillBody);
+    const skillBody = await readRuntimeFile('skills/check/SKILL.md', { sourceDir, sourceBase });
+    checkSkill = installCheckSkill(skillBody, { homeDir });
   } catch {
-    checkAgySkillPath = null;
+    checkSkill = { skillPath: null, conflict: null };
   }
 
   const quotaRefresh = await refreshQuotaCache(runtimeDir, { env, homeDir, platform: options.platform, keyringReader: options.keyringReader });
@@ -276,8 +274,9 @@ async function installRuntime(options = {}) {
     settingsPath: result.settingsPath,
     command: result.command,
     hooksPath: hooksResult.hooksPath,
-    checkAgyHookPath: checkAgyHookResult.hookScriptPath,
-    checkAgySkillPath,
+    checkHookPath: checkHookResult.hookScriptPath,
+    checkSkillPath: checkSkill.skillPath,
+    checkSkillConflict: checkSkill.conflict,
     files: RUNTIME_FILES,
     stalePluginFiles,
     quotaRefresh,

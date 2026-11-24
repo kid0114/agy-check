@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { resolveAntigravityPath, getAntigravityRoots } = require('./paths.js');
+const { removeCheckSkills } = require('./statusline-installer.js');
 
 function isOurStatusLineCommand(command, runtimeDir) {
   if (!command) return false;
@@ -148,7 +149,7 @@ function uninstall(options = {}) {
   const settingsPath = options.settingsPath || resolveAntigravityPath('settings.json');
   const hooksPath = options.hooksPath || path.join(homeDir, '.gemini', 'config', 'hooks.json');
 
-  const results = { settingsPath, hooksPath, statusLine: null, timerHooks: null, runtimes: [], tokenMirrors: [], extraFiles: [] };
+  const results = { settingsPath, hooksPath, statusLine: null, timerHooks: null, runtimes: [], tokenMirrors: [], extraFiles: [], skills: [] };
 
   for (const root of roots) {
     const runtimeDir = path.join(root, 'agy-hud-runtime');
@@ -167,6 +168,7 @@ function uninstall(options = {}) {
   const activeRuntimeDir = path.join(path.dirname(settingsPath), 'agy-hud-runtime');
   results.statusLine = clearStatusLine(settingsPath, activeRuntimeDir);
   results.timerHooks = clearTimerHooks(hooksPath);
+  results.skills = removeCheckSkills({ homeDir });
   results.tokenMirrors = removeTokenMirrors();
   results.shShims = removeWindowsShShims(process.platform, env);
 
@@ -188,6 +190,9 @@ if (require.main === module) {
   }
   for (const f of result.extraFiles) {
     process.stdout.write(`extra file removed: ${f}\n`);
+  }
+  for (const f of result.skills) {
+    process.stdout.write(`skill removed: ${f}\n`);
   }
   for (const f of result.shShims) {
     process.stdout.write(`Windows sh shim removed: ${f}\n`);

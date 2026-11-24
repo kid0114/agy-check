@@ -36,8 +36,8 @@ const { getSpeedCachePath } = require('../../runtime/speed.js');
 const { createPanelServer } = require('../../runtime/panel-server.js');
 const { renderPanelHtml } = require('../../runtime/panel-ui.js');
 const { formatOverviewTable, formatSessionDetailText, parseCliArgs } = require('../../runtime/panel-cli.js');
-const { parseCheckAgyInput, handleCheckAgyHook } = require('../../runtime/checkagy-hook.js');
-const { configureCheckAgyHook } = require('../../runtime/statusline-installer.js');
+const { parseCheckInput, handleCheckHook } = require('../../runtime/check-hook.js');
+const { configureCheckHook, installCheckSkill, removeCheckSkills } = require('../../runtime/statusline-installer.js');
 const { clearTimerHooks } = require('../../runtime/uninstall.js');
 const { renderHUD } = require('../../runtime/renderer.js');
 
@@ -331,24 +331,27 @@ describe('multi-session panel & account-sync', () => {
     }
   });
 
-  test('/checkagy PreInvocation hook intercepts slash commands with zero LLM call and English markdown', async () => {
-    assert.equal(parseCheckAgyInput('hello world'), null);
-    assert.deepEqual(parseCheckAgyInput('/checkagy'), { subcommand: 'panel', args: [], rawArgs: '' });
-    assert.deepEqual(parseCheckAgyInput('/checkagy ls 7d'), { subcommand: 'ls', args: ['7d'], rawArgs: 'ls 7d' });
-    assert.deepEqual(parseCheckAgyInput('<USER_REQUEST>\n/checkagy stop\n</USER_REQUEST>'), {
+  test('/check PreInvocation hook intercepts slash commands with zero LLM call and English markdown', async () => {
+    assert.equal(parseCheckInput('hello world'), null);
+    assert.deepEqual(parseCheckInput('/check'), { subcommand: 'panel', args: [], rawArgs: '' });
+    assert.deepEqual(parseCheckInput('/check ls 7d'), { subcommand: 'ls', args: ['7d'], rawArgs: 'ls 7d' });
+    // Other commands that merely start with "check" must pass through to agy.
+    assert.equal(parseCheckInput('/checkout main'), null);
+    assert.equal(parseCheckInput('/checkagy'), null);
+    assert.deepEqual(parseCheckInput('<USER_REQUEST>\n/check stop\n</USER_REQUEST>'), {
       subcommand: 'stop',
       args: [],
       rawArgs: 'stop',
     });
 
     // Non-matching prompt passes through cleanly
-    const passthrough = await handleCheckAgyHook({ lastUserInput: 'explain quicksort' });
+    const passthrough = await handleCheckHook({ lastUserInput: 'explain quicksort' });
     assert.deepEqual(passthrough, {});
 
-    // `/checkagy` launches panel, opens browser, and terminates before model call
+    // `/check` launches panel, opens browser, and terminates before model call
     let openedUrl = null;
-    const res = await handleCheckAgyHook(
-      { lastUserInput: '/checkagy', conversationId: 'conv-1' },
+    const res = await handleCheckHook(
+      { lastUserInput: '/check', conversationId: 'conv-1' },
       {
         ensurePanel: async () => ({ ok: true, alreadyRunning: false, pid: 4242, port: 18721, url: 'http://127.0.0.1:18721' }),
         openBrowser: (u) => { openedUrl = u; },
@@ -367,14 +370,14 @@ describe('multi-session panel & account-sync', () => {
     const md = res.injectSteps[0].systemMessage.systemMessage;
     assert.match(md, /http:\/\/127\.0\.0\.1:18721/);
     assert.match(md, /demo@gmail\.com/);
-    assert.equal(CJK_RE.test(md), false, '/checkagy inline markdown must be strictly English');
+    assert.equal(CJK_RE.test(md), false, '/check inline markdown must be strictly English');
 
     // Hook installer + uninstaller preserve unrelated hooks
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-check-hook-cfg-'));
     try {
       const hooksPath = path.join(tmp, 'hooks.json');
       fs.writeFileSync(hooksPath, JSON.stringify({ keep: { Stop: [] } }));
-      const installed = configureCheckAgyHook(path.join(tmp, 'runtime'), { hooksPath, nodePath: '/usr/bin/node' });
+      const installed = configureCheckHook(path.join(tmp, 'runtime'), { hooksPath, nodePath: '/usr/bin/node' });
       assert.equal(installed.changed, true);
       const afterInstall = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
       assert.ok(afterInstall.keep);
@@ -383,6 +386,24 @@ describe('multi-session panel & account-sync', () => {
       const afterClear = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
       assert.ok(afterClear.keep);
       assert.equal(afterClear['agy-check-slash-command'], undefined);
+
+      // Skill install retires our old /checkagy skill but never overwrites a user's own `check` skill.
+      const skillsDir = path.join(tmp, '.gemini', 'config', 'skills');
+      const ours = '---\nname: check\n---\nHandled by the `agy-check-slash-command` hook.\n';
+      fs.mkdirSync(path.join(skillsDir, 'checkagy'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'checkagy', 'SKILL.md'), ours.replace('name: check', 'name: checkagy'));
+      const first = installCheckSkill(ours, { homeDir: tmp });
+      assert.equal(first.skillPath, path.join(skillsDir, 'check', 'SKILL.md'));
+      assert.equal(fs.existsSync(path.join(skillsDir, 'checkagy')), false);
+      assert.deepEqual(removeCheckSkills({ homeDir: tmp }), [path.join(skillsDir, 'check')]);
+
+      fs.mkdirSync(path.join(skillsDir, 'check'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'check', 'SKILL.md'), '---\nname: check\n---\nMy own lint checklist.\n');
+      const blocked = installCheckSkill(ours, { homeDir: tmp });
+      assert.equal(blocked.skillPath, null);
+      assert.equal(blocked.conflict, path.join(skillsDir, 'check', 'SKILL.md'));
+      assert.deepEqual(removeCheckSkills({ homeDir: tmp }), []);
+      assert.match(fs.readFileSync(path.join(skillsDir, 'check', 'SKILL.md'), 'utf8'), /My own lint checklist/);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -403,11 +424,11 @@ describe('multi-session panel & account-sync', () => {
         JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: nowIso, model: 'gemini-4-neon', input_tokens: 5000, cache_read_tokens: 20000, output_tokens: 1200, content: 'Visible reply text here.' }),
       ].join('\n') + '\n');
 
-      // Empty non-running transcript (e.g. terminated /checkagy hook with 0 PLANNER_RESPONSE turns)
+      // Empty non-running transcript (e.g. terminated /check hook with 0 PLANNER_RESPONSE turns)
       const emptyLogDir = path.join(cliRoot, 'brain', emptyId, '.system_generated', 'logs');
       fs.mkdirSync(emptyLogDir, { recursive: true });
       fs.writeFileSync(path.join(emptyLogDir, 'transcript.jsonl'), [
-        JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: nowIso, content: '/checkagy --no-open' }),
+        JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: nowIso, content: '/check --no-open' }),
       ].join('\n') + '\n');
 
       // Write speed-cache keyed on legacy sibling path `<tmp>/antigravity/brain/<id>/...`

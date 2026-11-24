@@ -17,7 +17,7 @@
 | 部分 | 在哪里 | 显示什么 |
 |---|---|---|
 | **状态栏** | 每个 `agy` 会话底部 | 输出速度（`out` / `net≈`）、工具耗时、单轮与整会话缓存命中率、上下文窗口、5 小时与每周配额 |
-| **面板** | 在 `agy` 内输入 `/checkagy`，或运行 `agy-check panel` | 所有会话汇总在一个实时页面：缓存效率、速度、token、各账号配额、按时间范围的估算费用，以及每一轮未命中缓存的原因 |
+| **面板** | 在 `agy` 内输入 `/check`，或运行 `agy-check panel` | 所有会话汇总在一个实时页面：缓存效率、速度、token、各账号配额、按时间范围的估算费用，以及每一轮未命中缓存的原因 |
 | **命令行** | `agy-check ls` / `session` / `sync` | 同样的数据，以纯文本表格输出 |
 
 全部在本机运行，只读取 `agy` 本来就会写入的文件。没有运行时依赖，没有遥测，面板只监听 `127.0.0.1`。
@@ -57,7 +57,7 @@ node scripts/bootstrap.js
 2. 把运行时复制到 `~/.gemini/antigravity-cli/agy-hud-runtime/`。
 3. 在 `~/.gemini/antigravity-cli/settings.json` 写入 `statusLine.command`。
 4. 向 `~/.gemini/config/hooks.json` 注册 `agy-hud-invocation-timer`（`PreInvocation`、`PostToolUse`、`PostInvocation`），保留你已有的 Hook。`out`、`net≈`、`tooltime` 依赖这些 Hook。
-5. 注册 `agy-check-slash-command`（`PreInvocation`）Hook，并安装 `/checkagy` 技能（`~/.gemini/config/skills/checkagy/SKILL.md`）。
+5. 注册 `agy-check-slash-command`（`PreInvocation`）Hook，并安装 `/check` 技能（`~/.gemini/config/skills/check/SKILL.md`）。如果你已有自己的同名技能 `check`，安装程序不会覆盖它，斜杠菜单里也就不会出现本工具的 `/check` 条目；直接输入 `/check` 仍会由 Hook 处理。
 
 重复运行是安全的，会更新或修复现有安装。新开一个 `agy` 会话即可看到状态栏。
 
@@ -68,19 +68,19 @@ node scripts/bootstrap.js
 在 `agy` 中输入：
 
 ```text
-/checkagy
+/check
 ```
 
-`/checkagy` 由 Hook 在调用模型之前直接处理，不消耗 token。它会在后台启动面板（已在运行则直接复用），并打开 `http://127.0.0.1:18721`。
+`/check` 由 Hook 在调用模型之前直接处理，不消耗 token。它会在后台启动面板（已在运行则直接复用），并打开 `http://127.0.0.1:18721`。
 
 | 命令 | 作用 |
 |---|---|
-| `/checkagy` 或 `/checkagy panel` | 启动或复用面板，并在浏览器中打开 |
-| `/checkagy ls [active\|24h\|today\|7d\|30d\|all]` | 在对话中输出会话表 |
-| `/checkagy session [id]` | 查看某个会话的逐轮缓存详情（默认当前会话） |
-| `/checkagy refresh` | 刷新配额后输出会话表 |
-| `/checkagy sync [--apply]` | 预览账号同步，加 `--apply` 则实际执行 |
-| `/checkagy stop` | 停止后台面板 |
+| `/check` 或 `/check panel` | 启动或复用面板，并在浏览器中打开 |
+| `/check ls [active\|24h\|today\|7d\|30d\|all]` | 在对话中输出会话表 |
+| `/check session [id]` | 查看某个会话的逐轮缓存详情（默认当前会话） |
+| `/check refresh` | 刷新配额后输出会话表 |
+| `/check sync [--apply]` | 预览账号同步，加 `--apply` 则实际执行 |
+| `/check stop` | 停止后台面板 |
 
 ### 页面内容
 
@@ -315,7 +315,7 @@ npm test
 
 ## 卸载
 
-如果面板正在运行，先停止它（`/checkagy stop` 或 `agy-check panel stop`）。
+如果面板正在运行，先停止它（`/check stop` 或 `agy-check panel stop`）。
 
 **macOS / Linux**
 ```bash
@@ -327,7 +327,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/unins
 irm https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.ps1 | iex
 ```
 
-卸载会从 `settings.json` 删除 `statusLine`，从 `hooks.json` 删除 `agy-hud-invocation-timer` 与 `agy-check-slash-command`（其他 Hook 不受影响），删除 `agy-hud-runtime` 及其缓存，并卸载插件。`/checkagy` 技能目录 `~/.gemini/config/skills/checkagy/` 不会被删除，如不再需要请手动删除。
+卸载会从 `settings.json` 删除 `statusLine`，从 `hooks.json` 删除 `agy-hud-invocation-timer` 与 `agy-check-slash-command`（其他 Hook 不受影响），删除本工具安装的 `/check` 技能（你自己编写的 `check` 技能会保留），删除 `agy-hud-runtime` 及其缓存，并卸载插件。
 
 ---
 

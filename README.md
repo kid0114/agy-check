@@ -17,7 +17,7 @@ A real-time status line and a multi-session dashboard for the Antigravity CLI (`
 | Part | Where | What it shows |
 |---|---|---|
 | **Status line** | Bottom of every `agy` session | Output speed (`out` / `net≈`), tool time, per-turn and session cache hit rate, context window, 5-hour and weekly quota |
-| **Dashboard** | `/checkagy` inside `agy`, or `agy-check panel` | Every session in one live page: cache efficiency, speed, tokens, quota per account, estimated cost per time range, and why individual turns missed the cache |
+| **Dashboard** | `/check` inside `agy`, or `agy-check panel` | Every session in one live page: cache efficiency, speed, tokens, quota per account, estimated cost per time range, and why individual turns missed the cache |
 | **CLI** | `agy-check ls` / `session` / `sync` | The same data as plain-text tables |
 
 Everything runs locally from files `agy` already writes. There are no runtime dependencies and no telemetry, and the dashboard only listens on `127.0.0.1`.
@@ -57,7 +57,7 @@ The installer:
 2. Copies the runtime to `~/.gemini/antigravity-cli/agy-hud-runtime/`.
 3. Sets `statusLine.command` in `~/.gemini/antigravity-cli/settings.json`.
 4. Adds the `agy-hud-invocation-timer` hooks (`PreInvocation`, `PostToolUse`, `PostInvocation`) to `~/.gemini/config/hooks.json`, keeping any hooks you already have. These power `out`, `net≈` and `tooltime`.
-5. Adds the `agy-check-slash-command` `PreInvocation` hook and the `/checkagy` skill (`~/.gemini/config/skills/checkagy/SKILL.md`).
+5. Adds the `agy-check-slash-command` `PreInvocation` hook and the `/check` skill (`~/.gemini/config/skills/check/SKILL.md`). If you already have your own skill named `check`, it is left untouched and the `/check` entry is skipped from the slash-command menu; typing `/check` still works through the hook.
 
 Running it again is safe and updates or repairs the setup. Open a new `agy` session to see the status line.
 
@@ -68,19 +68,19 @@ Running it again is safe and updates or repairs the setup. Open a new `agy` sess
 Inside `agy`, type:
 
 ```text
-/checkagy
+/check
 ```
 
-A hook answers `/checkagy` before any model call, so it costs no tokens. It starts the dashboard in the background, or reuses one that is already running, and opens `http://127.0.0.1:18721`.
+A hook answers `/check` before any model call, so it costs no tokens. It starts the dashboard in the background, or reuses one that is already running, and opens `http://127.0.0.1:18721`.
 
 | Command | What it does |
 |---|---|
-| `/checkagy` or `/checkagy panel` | Start or reuse the dashboard and open it in your browser |
-| `/checkagy ls [active\|24h\|today\|7d\|30d\|all]` | Print the session table in the chat |
-| `/checkagy session [id]` | Per-turn cache detail for one session (defaults to the current one) |
-| `/checkagy refresh` | Refresh quota, then print the session table |
-| `/checkagy sync [--apply]` | Preview the account sync, or run it with `--apply` |
-| `/checkagy stop` | Stop the background dashboard |
+| `/check` or `/check panel` | Start or reuse the dashboard and open it in your browser |
+| `/check ls [active\|24h\|today\|7d\|30d\|all]` | Print the session table in the chat |
+| `/check session [id]` | Per-turn cache detail for one session (defaults to the current one) |
+| `/check refresh` | Refresh quota, then print the session table |
+| `/check sync [--apply]` | Preview the account sync, or run it with `--apply` |
+| `/check stop` | Stop the background dashboard |
 
 ### What's on the page
 
@@ -315,7 +315,7 @@ npm test
 
 ## Uninstall
 
-Stop the dashboard first if it is running (`/checkagy stop` or `agy-check panel stop`).
+Stop the dashboard first if it is running (`/check stop` or `agy-check panel stop`).
 
 **macOS / Linux**
 ```bash
@@ -327,7 +327,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kid0114/agy-check/main/unins
 irm https://raw.githubusercontent.com/kid0114/agy-check/main/uninstall.ps1 | iex
 ```
 
-This removes `statusLine` from `settings.json`, removes the `agy-hud-invocation-timer` and `agy-check-slash-command` hooks from `hooks.json` (other hooks are left alone), deletes `agy-hud-runtime` and its caches, and uninstalls the plugin. The `/checkagy` skill folder `~/.gemini/config/skills/checkagy/` is not removed; delete it by hand if you no longer want it.
+This removes `statusLine` from `settings.json`, removes the `agy-hud-invocation-timer` and `agy-check-slash-command` hooks from `hooks.json` (other hooks are left alone), removes the `/check` skill this tool installed (a `check` skill you wrote yourself is kept), deletes `agy-hud-runtime` and its caches, and uninstalls the plugin.
 
 ---
 

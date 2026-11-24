@@ -2,11 +2,11 @@
 'use strict';
 
 /**
- * Zero-token PreInvocation hook for the `/checkagy` slash command inside agy CLI.
+ * Zero-token PreInvocation hook for the `/check` slash command inside agy CLI.
  *
- * When the user submits `/checkagy` (or `/checkagy [panel|ls|session|sync|refresh|stop]`),
+ * When the user submits `/check` (or `/check [panel|ls|session|sync|refresh|stop]`),
  * this hook intercepts the turn BEFORE any model call, launches/reuses the local
- * WebUI panel and opens it automatically (for `/checkagy` / `/checkagy panel`),
+ * WebUI panel and opens it automatically (for `/check` / `/check panel`),
  * and renders a concise English Markdown summary inline via `metadata.user_markdown`
  * with `terminationBehavior: "terminate"`.
  */
@@ -24,32 +24,32 @@ const { formatToolDuration } = require('./speed.js');
 
 /**
  * Parses `lastUserInput` from a PreInvocation hook payload.
- * Returns null if the user message is not a `/checkagy` invocation.
+ * Returns null if the user message is not a `/check` invocation.
  */
-function parseCheckAgyInput(rawInput) {
+function parseCheckInput(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return null;
   const trimmed = rawInput.trim();
   if (!trimmed) return null;
 
-  // Match direct slash command `/checkagy ...` or skill-wrapped `<USER_REQUEST>\n/checkagy ...`
+  // Match direct slash command `/check ...` or skill-wrapped `<USER_REQUEST>\n/check ...`
   let line = trimmed;
   const unwrapped = trimmed.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
   if (unwrapped) {
     line = unwrapped[1].trim();
   }
 
-  // Handle agy's slash-skill expansion if it prepends a skill directive containing `/checkagy`
-  const directMatch = line.match(/^\/checkagy(?:\s+([\s\S]*))?$/i);
+  // Handle agy's slash-skill expansion if it prepends a skill directive containing `/check`
+  const directMatch = line.match(/^\/check(?:\s+([\s\S]*))?$/i);
   let rest = null;
   if (directMatch) {
     rest = (directMatch[1] || '').trim();
   } else {
-    // Check first line if agy expanded skill instructions below `/checkagy`
+    // Check first line if agy expanded skill instructions below `/check`
     const firstLine = line.split('\n')[0].trim();
-    const firstMatch = firstLine.match(/^\/checkagy(?:\s+(.*))?$/i);
+    const firstMatch = firstLine.match(/^\/check(?:\s+(.*))?$/i);
     if (firstMatch) {
       rest = (firstMatch[1] || '').trim();
-    } else if (/^Use the [`'"]?checkagy[`'"]? skill/i.test(firstLine) || /<skill[^>]*name=["']checkagy["']/i.test(line)) {
+    } else if (/^Use the [`'"]?check[`'"]? skill/i.test(firstLine) || /<skill[^>]*name=["']check["']/i.test(line)) {
       const argMatch = line.match(/(?:arguments?|user input|args?)\s*:\s*(.+)/i);
       rest = argMatch ? argMatch[1].trim() : '';
     }
@@ -126,7 +126,7 @@ function formatOverviewMarkdown(overview, options = {}) {
 
   if (summary.unsyncedCount > 0) {
     lines.push('');
-    lines.push(`> **Warning:** ${summary.unsyncedCount} running \`agy\` session(s) still hold an older account. Run \`/checkagy sync\` to preview or use the WebUI panel to sync safely.`);
+    lines.push(`> **Warning:** ${summary.unsyncedCount} running \`agy\` session(s) still hold an older account. Run \`/check sync\` to preview or use the WebUI panel to sync safely.`);
   }
 
   const rows = (overview.sessions || []).slice(0, limit);
@@ -150,7 +150,7 @@ function formatOverviewMarkdown(overview, options = {}) {
   }
 
   lines.push('');
-  lines.push('_Shortcuts: `/checkagy` (open panel) · `/checkagy ls [active|24h|today|7d|30d|all]` · `/checkagy session [id]` · `/checkagy refresh` · `/checkagy sync [--apply]` · `/checkagy stop`_');
+  lines.push('_Shortcuts: `/check` (open panel) · `/check ls [active|24h|today|7d|30d|all]` · `/check session [id]` · `/check refresh` · `/check sync [--apply]` · `/check stop`_');
   return lines.join('\n');
 }
 
@@ -175,7 +175,7 @@ function formatSessionMarkdown(detail) {
   if (turns.length > 0) {
     lines.push('');
     if (detail.turns.length > turns.length) {
-      lines.push(`_Showing latest ${turns.length} of ${detail.turns.length} turns (open \`/checkagy\` WebUI for full history & chart)._`);
+      lines.push(`_Showing latest ${turns.length} of ${detail.turns.length} turns (open \`/check\` WebUI for full history & chart)._`);
       lines.push('');
     }
     lines.push('| Turn | Step | Gap | Model | Uncached | Cache Read | Out | Hit % | Miss Diagnosis |');
@@ -224,8 +224,8 @@ function clearPendingInvocationTimer(conversationId, rootDir = null) {
   }
 }
 
-async function handleCheckAgyHook(payload, deps = {}) {
-  const parsed = parseCheckAgyInput(payload?.lastUserInput);
+async function handleCheckHook(payload, deps = {}) {
+  const parsed = parseCheckInput(payload?.lastUserInput);
   if (!parsed) return {};
 
   const {
@@ -259,7 +259,7 @@ async function handleCheckAgyHook(payload, deps = {}) {
   if (subcommand === 'session' || subcommand === 'inspect') {
     const targetId = args[0] || payload?.conversationId || '';
     if (!targetId) {
-      return buildTerminateResponse('### agy-check Session\nProvide a conversation ID or prefix: `/checkagy session <id-prefix>`.');
+      return buildTerminateResponse('### agy-check Session\nProvide a conversation ID or prefix: `/check session <id-prefix>`.');
     }
     const detail = await detailBuilder(targetId, { rootDir });
     if (!detail) {
@@ -284,7 +284,7 @@ async function handleCheckAgyHook(payload, deps = {}) {
       '### agy-check Account Sync Preview (Dry-Run)',
       preview.error ? `Error: \`${preview.error}\`` : '',
       preview.rawOutput ? `\n\`\`\`text\n${preview.rawOutput}\n\`\`\`` : '',
-      '\nRun `/checkagy sync --apply` (or confirm inside the `/checkagy` WebUI panel) to execute.',
+      '\nRun `/check sync --apply` (or confirm inside the `/check` WebUI panel) to execute.',
     ].filter(Boolean).join('\n');
     return buildTerminateResponse(body);
   }
@@ -303,7 +303,7 @@ async function handleCheckAgyHook(payload, deps = {}) {
     return buildTerminateResponse(formatOverviewMarkdown(overview, { limit: 15 }));
   }
 
-  // Default: `/checkagy` or `/checkagy panel` -> ensure background server is up,
+  // Default: `/check` or `/check panel` -> ensure background server is up,
   // pop open browser automatically, and print live English summary inline.
   const customPortIdx = args.indexOf('--port');
   const resolvedPort = (customPortIdx !== -1 && args[customPortIdx + 1])
@@ -335,7 +335,7 @@ function main() {
     if (raw) {
       try {
         const payload = JSON.parse(raw);
-        result = await handleCheckAgyHook(payload);
+        result = await handleCheckHook(payload);
       } catch {
         result = {};
       }
@@ -361,9 +361,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseCheckAgyInput,
+  parseCheckInput,
   formatOverviewMarkdown,
   formatSessionMarkdown,
   buildTerminateResponse,
-  handleCheckAgyHook,
+  handleCheckHook,
 };
