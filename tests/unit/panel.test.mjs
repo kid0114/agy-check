@@ -26,6 +26,10 @@ const {
 } = require('../../runtime/account-sync.js');
 const {
   parseTranscriptMetrics,
+  getSqliteCacheStamp,
+  updateSummaryBlobTitle,
+  renameConversationTitle,
+  loadConversationSummaries,
   diagnoseTurnCacheMiss,
   readSpeedCacheForConversation,
   resolveSessionSpeed,
@@ -725,5 +729,176 @@ describe('multi-session panel & account-sync', () => {
     assert.deepEqual(ov.providers.map(p => p.key), ['google', 'claude']);
     assert.equal(ov.providers[0].fiveHour.percent, 97);
     assert.equal(ov.providers[0].weekly.percent, 83);
+  });
+
+  test('WAL-aware loadConversationSummaries, protobuf raw_summary rewrite, and POST /api/session/:id/title work end to end', async () => {
+    const { execFileSync } = require('node:child_process');
+    const http = require('node:http');
+    const sqliteBin = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-check-rename-'));
+    const convId = '11111111-2222-4333-8444-555555555555';
+
+    // Build a synthetic raw_summary protobuf matching agy's layout:
+    // field 1 (string), field 2 (varint=42), field 15 (msg { field 1: string }), field 22 (varint=4)
+    const encVarint = (n) => {
+      let v = BigInt(n);
+      const out = [];
+      while (v >= 0x80n) { out.push(Number((v & 0x7fn) | 0x80n)); v >>= 7n; }
+      out.push(Number(v));
+      return Buffer.from(out);
+    };
+    const encBytes = (f, buf) => Buffer.concat([encVarint((BigInt(f) << 3n) | 2n), encVarint(buf.length), buf]);
+    const encVarField = (f, val) => Buffer.concat([encVarint(BigInt(f) << 3n), encVarint(val)]);
+    const origTitle = 'Original Title';
+    const rawBlob = Buffer.concat([
+      encBytes(1, Buffer.from(origTitle, 'utf8')),
+      encVarField(2, 42),
+      encBytes(15, encBytes(1, Buffer.from(origTitle, 'utf8'))),
+      encVarField(22, 4),
+    ]);
+
+    try {
+      // 1. Unit check protobuf updater directly (preserves fields 2 & 22 and rewrites UTF-8 / quotes cleanly)
+      const renamedBlob = updateSummaryBlobTitle(rawBlob, "Renamed '标题' 2026");
+      assert.ok(Buffer.isBuffer(renamedBlob));
+      assert.ok(renamedBlob.includes(Buffer.from("Renamed '标题' 2026", 'utf8')));
+      assert.equal(renamedBlob.includes(Buffer.from(origTitle, 'utf8')), false);
+      // Varint fields 2=42 (0x10 0x2a) and 22=4 (0xb0 0x01 0x04) stay intact
+      assert.ok(renamedBlob.includes(Buffer.from([0x10, 0x2a])));
+      assert.ok(renamedBlob.includes(Buffer.from([0xb0, 0x01, 0x04])));
+
+      // 2. Create WAL-mode conversation_summaries.db + conversations_fts
+      const dbPath = path.join(tmp, 'conversation_summaries.db');
+      execFileSync(sqliteBin, [dbPath], {
+        input: [
+          'PRAGMA journal_mode=WAL;',
+          'CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text NOT NULL DEFAULT "", preview text NOT NULL DEFAULT "", step_count integer NOT NULL DEFAULT 0, last_modified_time datetime NOT NULL, workspace_uris text NOT NULL, raw_summary BLOB);',
+          'CREATE TABLE conversations_fts (conversation_id text, chunk_index integer, title text);',
+          `INSERT INTO conversation_summaries VALUES ('${convId}', '${origTitle}', 'preview', 10, '2026-11-24T12:00:00Z', '["file:///tmp/demo"]', X'${rawBlob.toString('hex')}');`,
+          `INSERT INTO conversations_fts VALUES ('${convId}', -1, '${origTitle}');`,
+        ].join('\n') + '\n',
+        encoding: 'utf8',
+      });
+
+      // 3. Cache populates, then WAL write changes title without changing main .db mtime -> cache MUST invalidate
+      const summaryCache = {};
+      const firstMap = loadConversationSummaries(tmp, summaryCache);
+      assert.equal(firstMap.get(convId).title, origTitle);
+      const stampBefore = getSqliteCacheStamp(dbPath);
+      assert.ok(stampBefore && stampBefore.stamp);
+
+      // Rename via helper (writes in WAL mode)
+      const res = renameConversationTitle(convId, "Updated '标题' v2", { rootDir: tmp, summaryCache });
+      assert.equal(res.ok, true);
+      assert.equal(res.title, "Updated '标题' v2");
+      assert.equal(res.previousTitle, origTitle);
+
+      // Verify both DB columns, raw_summary blob, and FTS row were updated (even when WAL has checkpointed & removed -shm)
+      const dbOut = execFileSync(sqliteBin, [
+        '-cmd', 'PRAGMA query_only = ON;',
+        '-json',
+        dbPath,
+        `SELECT s.title AS stitle, hex(s.raw_summary) AS rhex, f.title AS ftitle FROM conversation_summaries s JOIN conversations_fts f ON s.conversation_id = f.conversation_id WHERE s.conversation_id = '${convId}' AND f.chunk_index = -1;`,
+      ], { encoding: 'utf8' });
+      const [row] = JSON.parse(dbOut);
+      assert.equal(row.stitle, "Updated '标题' v2");
+      assert.equal(row.ftitle, "Updated '标题' v2");
+      const storedBlob = Buffer.from(row.rhex, 'hex');
+      assert.ok(storedBlob.includes(Buffer.from("Updated '标题' v2", 'utf8')));
+
+      // Now simulate an external agy /rename write directly into WAL while summaryCache is populated
+      const populated = loadConversationSummaries(tmp, summaryCache);
+      assert.equal(populated.get(convId).title, "Updated '标题' v2");
+      execFileSync(sqliteBin, [dbPath], {
+        input: `PRAGMA wal_autocheckpoint=0; UPDATE conversation_summaries SET title = 'External Rename' WHERE conversation_id = '${convId}';\n`,
+        encoding: 'utf8',
+      });
+      const reloaded = loadConversationSummaries(tmp, summaryCache);
+      assert.equal(reloaded.get(convId).title, 'External Rename', 'WAL change must bust summaryCache even when .db mtime is unchanged');
+
+      // Validation guards
+      assert.equal(renameConversationTitle('pid-1234', 'Nope', { rootDir: tmp }).ok, false);
+      assert.equal(renameConversationTitle(convId, '   ', { rootDir: tmp }).ok, false);
+      assert.equal(renameConversationTitle('missing-id-9999', 'Nope', { rootDir: tmp }).status, 404);
+
+      // 4. HTTP endpoint + CSRF / LAN guards + HTML stays strictly English and script parses cleanly
+      const html = renderPanelHtml();
+      assert.equal(CJK_RE.test(html), false, 'Panel HTML must stay strictly English');
+      const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+      assert.ok(scriptMatch, 'inline script exists');
+      new Function(scriptMatch[1]);
+
+      const panel = createPanelServer({
+        rootDir: tmp,
+        port: 0,
+        lan: true,
+        dataOptions: {
+          authOptions: { tokenReader: () => ({ accessToken: 'tok', email: 'u@example.com', sourceFormat: 'macos-keychain' }) },
+          runningSessions: [],
+          quotaFetcher: async () => [],
+        },
+      });
+      const { url, port } = await panel.listen();
+      const send = (reqPath, { method = 'GET', headers = {}, body = null } = {}) => new Promise((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, path: reqPath, method, headers }, (r) => {
+          const chunks = [];
+          r.on('data', c => chunks.push(c));
+          r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, text: Buffer.concat(chunks).toString('utf8') }));
+        });
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+      });
+      try {
+        // Local same-origin rename succeeds and overview immediately reflects new title
+        const okRes = await fetch(`${url}/api/session/${convId}/title`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'API Renamed Session' }),
+        });
+        assert.equal(okRes.status, 200);
+        const okJson = await okRes.json();
+        assert.equal(okJson.ok, true);
+        assert.equal(okJson.title, 'API Renamed Session');
+
+        const ov = await (await fetch(`${url}/api/overview?range=all`)).json();
+        assert.equal(ov.sessions.find(s => s.conversationId === convId)?.title, 'API Renamed Session');
+
+        // Foreign Origin rejected
+        const badOrigin = await fetch(`${url}/api/session/${convId}/title`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
+          body: JSON.stringify({ title: 'Blocked' }),
+        });
+        assert.equal(badOrigin.status, 403);
+
+        // Unpaired LAN device rejected with 401; paired device with same-origin succeeds
+        const lanHost = { Host: `lan.test:${port}` };
+        assert.equal((await send(`/api/session/${convId}/title`, { method: 'POST', headers: lanHost, body: '{"title":"No"}' })).status, 401);
+        const pairCode = JSON.parse((await send('/api/pair/code', { method: 'POST' })).text).code;
+        const paired = await send('/api/pair', {
+          method: 'POST',
+          headers: { ...lanHost, Origin: `http://lan.test:${port}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: pairCode }),
+        });
+        const cookie = String(paired.headers['set-cookie']).split(';')[0];
+        assert.equal((await send(`/api/session/${convId}/title`, {
+          method: 'POST',
+          headers: { ...lanHost, Cookie: cookie, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'Missing Origin' }),
+        })).status, 403);
+        const phoneRename = await send(`/api/session/${convId}/title`, {
+          method: 'POST',
+          headers: { ...lanHost, Cookie: cookie, Origin: `http://lan.test:${port}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'Phone Renamed' }),
+        });
+        assert.equal(phoneRename.status, 200);
+        assert.equal(JSON.parse(phoneRename.text).title, 'Phone Renamed');
+      } finally {
+        await panel.close();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

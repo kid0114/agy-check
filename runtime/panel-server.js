@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { resolveAntigravityPath } = require('./paths.js');
 const { refreshQuotaNow } = require('./quota.js');
-const { buildPanelOverview, getSessionDetail } = require('./panel-data.js');
+const { buildPanelOverview, getSessionDetail, renameConversationTitle } = require('./panel-data.js');
 const { inspectLiveAuth, previewAccountSync, executeAccountSync } = require('./account-sync.js');
 const { renderPanelHtml, renderPairingHtml } = require('./panel-ui.js');
 
@@ -395,6 +395,7 @@ function computeOverviewDigest(overview) {
     summary: overview.summary,
     sessions: (overview.sessions || []).map(s => ({
       id: s.conversationId,
+      title: s.title || '',
       status: s.status,
       sync: s.syncStatus,
       pid: s.pid,
@@ -690,6 +691,31 @@ function createPanelServer(options = {}) {
           overview.auth = { ...overview.auth, syncBridgeAvailable: false };
         }
         sendJson(res, 200, overview);
+        return;
+      }
+
+      const renameMatch = req.method === 'POST' && /^\/api\/session\/([^/]+)\/title$/.exec(pathname);
+      if (renameMatch) {
+        if (!(local ? isSameOriginLocalRequest(req) : isSameOriginRemoteRequest(req))) {
+          sendJson(res, 403, { error: 'Forbidden origin' });
+          return;
+        }
+        let id;
+        try {
+          id = decodeURIComponent(renameMatch[1]);
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'Invalid conversation ID encoding' });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const renamer = options.sessionRenamer || ((convId, title) => renameConversationTitle(convId, title, { rootDir, summaryCache }));
+        const result = await renamer(id, body?.title);
+        if (!result || !result.ok) {
+          sendJson(res, result?.status || 400, { ok: false, error: result?.error || 'Rename failed' });
+          return;
+        }
+        scheduleBroadcast(true);
+        sendJson(res, 200, result);
         return;
       }
 

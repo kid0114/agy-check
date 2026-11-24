@@ -342,23 +342,338 @@ function parseTranscriptMetrics(transcriptPath, cache = null, options = {}) {
 }
 
 /**
+ * Builds a cache stamp covering both the main SQLite file and its active WAL
+ * file. SQLite in WAL mode writes updates (such as /rename) to `*-wal` without
+ * modifying the main `.db` file's mtime until checkpoint.
+ */
+function getSqliteCacheStamp(dbPath) {
+  let dbStat;
+  try {
+    dbStat = fs.statSync(dbPath);
+    if (!dbStat.isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  let walMtimeMs = 0;
+  let walSize = 0;
+  try {
+    const walStat = fs.statSync(`${dbPath}-wal`);
+    if (walStat.isFile()) {
+      walMtimeMs = walStat.mtimeMs;
+      walSize = walStat.size;
+    }
+  } catch {
+    // No active WAL file (checkpointed or non-WAL mode)
+  }
+
+  return {
+    mtimeMs: dbStat.mtimeMs,
+    stamp: `${dbStat.mtimeMs}:${dbStat.size}:${walMtimeMs}:${walSize}`,
+  };
+}
+
+function encodeProtobufVarint(value) {
+  let v = BigInt(value);
+  if (v < 0n) throw new Error('Negative protobuf varint');
+  const bytes = [];
+  while (v >= 0x80n) {
+    bytes.push(Number((v & 0x7fn) | 0x80n));
+    v >>= 7n;
+  }
+  bytes.push(Number(v));
+  return Buffer.from(bytes);
+}
+
+function decodeProtobufVarint(buf, offset) {
+  let val = 0n;
+  let shift = 0n;
+  let i = offset;
+  while (i < buf.length) {
+    const byte = buf[i++];
+    val |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value: val, nextOffset: i };
+    shift += 7n;
+    if (shift > 63n) throw new Error('Malformed protobuf varint');
+  }
+  throw new Error('Truncated protobuf varint');
+}
+
+function parseProtobufFields(buf) {
+  const fields = [];
+  let offset = 0;
+  while (offset < buf.length) {
+    const start = offset;
+    const tag = decodeProtobufVarint(buf, offset);
+    offset = tag.nextOffset;
+    const fieldNumber = Number(tag.value >> 3n);
+    const wireType = Number(tag.value & 7n);
+    if (!Number.isInteger(fieldNumber) || fieldNumber <= 0) {
+      throw new Error('Invalid protobuf field number');
+    }
+
+    if (wireType === 0) {
+      const val = decodeProtobufVarint(buf, offset);
+      offset = val.nextOffset;
+      fields.push({ fieldNumber, wireType, raw: buf.subarray(start, offset), payload: null });
+    } else if (wireType === 1) {
+      if (offset + 8 > buf.length) throw new Error('Truncated protobuf fixed64');
+      offset += 8;
+      fields.push({ fieldNumber, wireType, raw: buf.subarray(start, offset), payload: null });
+    } else if (wireType === 2) {
+      const lenDec = decodeProtobufVarint(buf, offset);
+      const len = Number(lenDec.value);
+      offset = lenDec.nextOffset;
+      if (!Number.isSafeInteger(len) || len < 0 || offset + len > buf.length) {
+        throw new Error('Truncated protobuf length-delimited field');
+      }
+      const payload = buf.subarray(offset, offset + len);
+      offset += len;
+      fields.push({ fieldNumber, wireType, raw: buf.subarray(start, offset), payload });
+    } else if (wireType === 5) {
+      if (offset + 4 > buf.length) throw new Error('Truncated protobuf fixed32');
+      offset += 4;
+      fields.push({ fieldNumber, wireType, raw: buf.subarray(start, offset), payload: null });
+    } else {
+      throw new Error(`Unsupported protobuf wire type: ${wireType}`);
+    }
+  }
+  return fields;
+}
+
+function encodeProtobufBytesField(fieldNumber, payloadBuf) {
+  const tag = encodeProtobufVarint((BigInt(fieldNumber) << 3n) | 2n);
+  const len = encodeProtobufVarint(payloadBuf.length);
+  return Buffer.concat([tag, len, payloadBuf]);
+}
+
+/**
+ * Updates the title strings inside agy's `raw_summary` protobuf BLOB (top-level
+ * field 1 and nested field 15 -> field 1) while preserving all other fields
+ * byte-for-byte. Returns null if `rawBuf` is empty.
+ */
+function updateSummaryBlobTitle(rawBuf, newTitle) {
+  if (!Buffer.isBuffer(rawBuf) || rawBuf.length === 0) return null;
+  const titleBuf = Buffer.from(String(newTitle), 'utf8');
+  const fields = parseProtobufFields(rawBuf);
+  const chunks = [];
+  let replacedField1 = false;
+
+  for (const field of fields) {
+    if (field.fieldNumber === 1 && field.wireType === 2) {
+      if (!replacedField1) {
+        chunks.push(encodeProtobufBytesField(1, titleBuf));
+        replacedField1 = true;
+      }
+      continue;
+    }
+
+    if (field.fieldNumber === 15 && field.wireType === 2 && field.payload) {
+      const subFields = parseProtobufFields(field.payload);
+      const subChunks = [];
+      let replacedSub1 = false;
+      for (const sf of subFields) {
+        if (sf.fieldNumber === 1 && sf.wireType === 2) {
+          if (!replacedSub1) {
+            subChunks.push(encodeProtobufBytesField(1, titleBuf));
+            replacedSub1 = true;
+          }
+          continue;
+        }
+        subChunks.push(sf.raw);
+      }
+      if (!replacedSub1) {
+        subChunks.unshift(encodeProtobufBytesField(1, titleBuf));
+      }
+      chunks.push(encodeProtobufBytesField(15, Buffer.concat(subChunks)));
+      continue;
+    }
+
+    chunks.push(field.raw);
+  }
+
+  if (!replacedField1) {
+    chunks.unshift(encodeProtobufBytesField(1, titleBuf));
+  }
+
+  const out = Buffer.concat(chunks);
+  // Round-trip sanity check before writing to SQLite.
+  parseProtobufFields(out);
+  return out;
+}
+
+function sqlHexText(str) {
+  const hex = Buffer.from(String(str), 'utf8').toString('hex');
+  return hex ? `CAST(X'${hex}' AS TEXT)` : "''";
+}
+
+/**
+ * Executes a read-only SELECT returning parsed JSON rows.
+ * Uses `PRAGMA query_only = ON` so WAL-mode DBs remain readable even when no
+ * `-shm` file is currently mapped (SQLite `-readonly` fails with SQLITE_CANTOPEN
+ * on unmapped WAL databases), falling back to `-readonly` for read-only media.
+ */
+function querySqliteJson(sqliteBin, dbPath, sql, timeoutMs = 2500) {
+  try {
+    const out = execFileSync(sqliteBin, [
+      '-cmd', `.timeout ${timeoutMs}`,
+      '-cmd', 'PRAGMA query_only = ON;',
+      '-json',
+      dbPath,
+      sql,
+    ], {
+      encoding: 'utf8',
+      timeout: timeoutMs + 1000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return out ? JSON.parse(out) : [];
+  } catch (primaryErr) {
+    try {
+      const out = execFileSync(sqliteBin, [
+        '-readonly',
+        '-json',
+        dbPath,
+        sql,
+      ], {
+        encoding: 'utf8',
+        timeout: timeoutMs + 1000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      return out ? JSON.parse(out) : [];
+    } catch {
+      throw primaryErr;
+    }
+  }
+}
+
+function sanitizeConversationTitle(rawTitle) {
+  if (typeof rawTitle !== 'string') return '';
+  return rawTitle
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim();
+}
+
+/**
+ * Permanently renames a conversation inside agy's `conversation_summaries.db`
+ * (updating `title`, `raw_summary` protobuf fields 1 and 15.1, and
+ * `conversations_fts` chunk -1 if present) inside an atomic WAL-safe transaction.
+ */
+function renameConversationTitle(conversationId, newTitle, options = {}) {
+  const { rootDir = null, summaryCache = null } = options;
+  const id = String(conversationId || '').trim();
+  if (!id || id.startsWith('pid-') || !/^[a-zA-Z0-9._-]{4,128}$/.test(id)) {
+    return { ok: false, status: 400, error: 'Invalid conversation ID' };
+  }
+
+  const cleanTitle = sanitizeConversationTitle(newTitle);
+  if (!cleanTitle) {
+    return { ok: false, status: 400, error: 'Title cannot be empty' };
+  }
+  if (cleanTitle.length > 200) {
+    return { ok: false, status: 400, error: 'Title must be 200 characters or fewer' };
+  }
+
+  const baseDir = rootDir || resolveAntigravityPath('');
+  const dbPath = path.join(baseDir, 'conversation_summaries.db');
+  if (!fs.existsSync(dbPath)) {
+    return { ok: false, status: 404, error: 'conversation_summaries.db not found' };
+  }
+
+  const sqliteBin = resolveSafeExecutable('sqlite3') || (fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : null);
+  if (!sqliteBin) {
+    return { ok: false, status: 500, error: 'sqlite3 executable not available' };
+  }
+
+  const idExpr = sqlHexText(id);
+  const titleExpr = sqlHexText(cleanTitle);
+
+  let row = null;
+  let hasFtsTable = false;
+  try {
+    const rows = querySqliteJson(
+      sqliteBin,
+      dbPath,
+      `SELECT conversation_id, title, hex(raw_summary) AS raw_hex, ` +
+      `(SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conversations_fts') AS has_fts ` +
+      `FROM conversation_summaries WHERE conversation_id = ${idExpr};`,
+      3000
+    );
+    if (Array.isArray(rows) && rows.length > 0) {
+      row = rows[0];
+      hasFtsTable = Number(row.has_fts) > 0;
+    }
+  } catch (err) {
+    return { ok: false, status: 500, error: `Failed to read conversation_summaries.db: ${err.message}` };
+  }
+
+  if (!row) {
+    return { ok: false, status: 404, error: 'Conversation not found in conversation_summaries.db' };
+  }
+
+  let updatedBlobHex = null;
+  if (typeof row.raw_hex === 'string' && row.raw_hex.length > 0) {
+    try {
+      const updatedBuf = updateSummaryBlobTitle(Buffer.from(row.raw_hex, 'hex'), cleanTitle);
+      if (updatedBuf) updatedBlobHex = updatedBuf.toString('hex');
+    } catch (err) {
+      return { ok: false, status: 500, error: `Failed to update raw_summary protobuf: ${err.message}` };
+    }
+  }
+
+  const stmts = [
+    'PRAGMA busy_timeout = 5000;',
+    'BEGIN IMMEDIATE;',
+    updatedBlobHex
+      ? `UPDATE conversation_summaries SET title = ${titleExpr}, raw_summary = X'${updatedBlobHex}' WHERE conversation_id = ${idExpr};`
+      : `UPDATE conversation_summaries SET title = ${titleExpr} WHERE conversation_id = ${idExpr};`,
+  ];
+  if (hasFtsTable) {
+    stmts.push(
+      `UPDATE conversations_fts SET title = ${titleExpr} WHERE conversation_id = ${idExpr} AND chunk_index = -1;`
+    );
+  }
+  stmts.push('COMMIT;');
+
+  try {
+    execFileSync(sqliteBin, ['-bail', dbPath], {
+      input: stmts.join('\n') + '\n',
+      encoding: 'utf8',
+      timeout: 6000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const detail = err.stderr ? String(err.stderr).trim() : err.message;
+    return { ok: false, status: 500, error: `Failed to write conversation_summaries.db: ${detail}` };
+  }
+
+  if (summaryCache && typeof summaryCache === 'object') {
+    delete summaryCache.stamp;
+    delete summaryCache.mtimeMs;
+    delete summaryCache.map;
+  }
+
+  return {
+    ok: true,
+    conversationId: id,
+    title: cleanTitle,
+    previousTitle: typeof row.title === 'string' ? row.title : '',
+  };
+}
+
+/**
  * Loads official conversation titles & step counts from agy's read-only SQLite DB
- * (`conversation_summaries.db`), cached by mtime.
+ * (`conversation_summaries.db`), cached by main DB + WAL stamp.
  */
 function loadConversationSummaries(rootDir = null, cache = null) {
   const baseDir = rootDir || resolveAntigravityPath('');
   const dbPath = path.join(baseDir, 'conversation_summaries.db');
   const empty = new Map();
 
-  let stat;
-  try {
-    stat = fs.statSync(dbPath);
-    if (!stat.isFile()) return empty;
-  } catch {
-    return empty;
-  }
+  const dbStamp = getSqliteCacheStamp(dbPath);
+  if (!dbStamp) return empty;
 
-  if (cache && cache.dbPath === dbPath && cache.mtimeMs === stat.mtimeMs && cache.map instanceof Map) {
+  if (cache && cache.dbPath === dbPath && cache.stamp === dbStamp.stamp && cache.map instanceof Map) {
     return cache.map;
   }
 
@@ -366,18 +681,12 @@ function loadConversationSummaries(rootDir = null, cache = null) {
   if (!sqliteBin) return empty;
 
   try {
-    const out = execFileSync(sqliteBin, [
-      '-readonly',
-      '-json',
+    const rows = querySqliteJson(
+      sqliteBin,
       dbPath,
       'SELECT conversation_id, step_count, title, preview, last_modified_time, workspace_uris FROM conversation_summaries;',
-    ], {
-      encoding: 'utf8',
-      timeout: 2500,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-
-    const rows = out ? JSON.parse(out) : [];
+      2500
+    );
     const map = new Map();
     if (Array.isArray(rows)) {
       for (const row of rows) {
@@ -404,7 +713,8 @@ function loadConversationSummaries(rootDir = null, cache = null) {
     }
     if (cache && typeof cache === 'object') {
       cache.dbPath = dbPath;
-      cache.mtimeMs = stat.mtimeMs;
+      cache.mtimeMs = dbStamp.mtimeMs;
+      cache.stamp = dbStamp.stamp;
       cache.map = map;
     }
     return map;
@@ -957,6 +1267,7 @@ function collectAllSessions(options = {}) {
       conversationId: id,
       shortId: id.slice(0, 8),
       title,
+      canRename: Boolean(summaryInfo),
       status,
       isRunning: Boolean(running),
       isGenerating,
@@ -1007,6 +1318,7 @@ function collectAllSessions(options = {}) {
       conversationId: syntheticId,
       shortId: `pid:${proc.pid}`,
       title: 'New / idle agy window (no conversation yet)',
+      canRename: false,
       status: 'running',
       isRunning: true,
       isGenerating: false,
@@ -1335,6 +1647,9 @@ module.exports = {
   formatGapShort,
   diagnoseTurnCacheMiss,
   parseTranscriptMetrics,
+  getSqliteCacheStamp,
+  updateSummaryBlobTitle,
+  renameConversationTitle,
   loadConversationSummaries,
   readAllHookTimings,
   readSpeedCacheForConversation,

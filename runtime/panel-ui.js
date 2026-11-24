@@ -372,7 +372,19 @@ function renderPanelHtml() {
       border-bottom: 1px solid var(--border);
     }
     .drawer-kicker { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-    .drawer-title { margin: 6px 0 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+    .drawer-title-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
+    .drawer-title-row[hidden], .rename-form[hidden], .rename-note[hidden] { display: none; }
+    .drawer-title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+    .drawer-title.editable { cursor: text; }
+    .drawer-title.editable:hover { color: var(--accent); }
+    .btn.icon.sm-icon { width: 26px; height: 26px; flex: none; color: var(--muted); }
+    .btn.icon.sm-icon:hover { color: var(--text); }
+    .rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+    .rename-input { flex: 1 1 220px; min-width: 0; height: 32px; }
+    .rename-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+    .rename-note { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+    .rename-note.warn { color: var(--amber); }
+    .rename-note.bad { color: var(--red); }
     .drawer-actions { display: flex; align-items: center; gap: 6px; flex: none; }
     .drawer-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px 22px; }
@@ -622,6 +634,8 @@ function renderPanelHtml() {
       .table-foot { padding: 12px 16px; }
 
       .drawer-head { padding: calc(14px + env(safe-area-inset-top)) 16px 12px; }
+      .btn.icon.sm-icon { width: 32px; height: 32px; min-height: 32px; }
+      .rename-input { flex-basis: 100%; height: 38px; font-size: 16px; }
       #btnCopyResumeLabel { display: none; }
       .chips { padding: 12px 16px; }
       .stat { padding: 12px 16px; }
@@ -744,9 +758,22 @@ function renderPanelHtml() {
 
   <aside id="drawer" class="drawer" aria-hidden="true">
     <div class="drawer-head">
-      <div style="min-width:0">
+      <div style="min-width:0;flex:1">
         <div id="detailKicker" class="drawer-kicker"></div>
-        <h2 id="detailTitle" class="drawer-title">Session</h2>
+        <div id="detailTitleRow" class="drawer-title-row">
+          <h2 id="detailTitle" class="drawer-title">Session</h2>
+          <button id="btnRenameTitle" class="btn ghost icon sm-icon" type="button" title="Rename session (F2)" aria-label="Rename session" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+        </div>
+        <form id="renameForm" class="rename-form" hidden>
+          <input id="renameInput" class="field rename-input" type="text" maxlength="200" autocomplete="off" aria-label="Session title" />
+          <div class="rename-actions">
+            <button id="btnRenameSave" class="btn sm primary" type="submit">Save</button>
+            <button id="btnRenameCancel" class="btn sm" type="button">Cancel</button>
+          </div>
+        </form>
+        <div id="renameNote" class="rename-note" hidden></div>
       </div>
       <div class="drawer-actions">
         <button id="btnCopyResume" class="btn sm">
@@ -786,7 +813,7 @@ function renderPanelHtml() {
   <div id="lanModal" class="modal-backdrop">
     <div class="modal">
       <h2>Open on a phone</h2>
-      <p>On the phone, open one of these addresses and enter the pairing code. A paired phone stays signed in for 30 days and can view this panel and refresh quota; account sync stays on this Mac.</p>
+      <p>On the phone, open one of these addresses and enter the pairing code. A paired phone stays signed in for 30 days and can view this panel, refresh quota and rename sessions; account sync stays on this Mac.</p>
       <div id="lanLinks" class="lan-links"></div>
       <div class="pair-code-box">
         <div class="muted small">Pairing code</div>
@@ -1370,11 +1397,115 @@ function renderPanelHtml() {
       if (sc) sc.scrollLeft = !keep || keep.atEnd ? sc.scrollWidth : keep.left;
     }
 
+    function canRenameSession(d) {
+      return Boolean(d && d.conversationId && !String(d.conversationId).startsWith('pid-') && d.canRename !== false);
+    }
+
+    function setRenameNote(text, tone) {
+      const el = $('renameNote');
+      if (!text) {
+        el.hidden = true;
+        el.textContent = '';
+        el.className = 'rename-note';
+        return;
+      }
+      el.hidden = false;
+      el.textContent = text;
+      el.className = 'rename-note' + (tone ? ' ' + tone : '');
+    }
+
+    function cancelRename() {
+      state.renamingId = null;
+      $('renameForm').hidden = true;
+      $('detailTitleRow').hidden = false;
+      $('btnRenameSave').disabled = false;
+      $('btnRenameCancel').disabled = false;
+      $('renameInput').disabled = false;
+      setRenameNote('', '');
+    }
+
+    function startRename() {
+      const d = state.detail;
+      if (!canRenameSession(d)) return;
+      state.renamingId = d.conversationId;
+      $('detailTitleRow').hidden = true;
+      $('renameForm').hidden = false;
+      $('renameInput').disabled = false;
+      $('btnRenameSave').disabled = false;
+      $('btnRenameCancel').disabled = false;
+      $('renameInput').value = d.title || '';
+      if (d.isRunning || d.isGenerating) {
+        setRenameNote('Active agy session: an open window may overwrite this on its next turn.', 'warn');
+      } else {
+        setRenameNote('', '');
+      }
+      $('renameInput').focus();
+      $('renameInput').select();
+    }
+
+    async function submitRename(e) {
+      e.preventDefault();
+      const d = state.detail;
+      if (!canRenameSession(d)) return;
+      const nextTitle = $('renameInput').value.replace(/[\\r\\n\\t]+/g, ' ').trim();
+      if (!nextTitle) {
+        setRenameNote('Title cannot be empty.', 'bad');
+        $('renameInput').focus();
+        return;
+      }
+      if (nextTitle === (d.title || '').trim()) {
+        cancelRename();
+        return;
+      }
+      $('renameInput').disabled = true;
+      $('btnRenameSave').disabled = true;
+      $('btnRenameCancel').disabled = true;
+      setRenameNote('Saving title…', '');
+      try {
+        const res = await fetch('/api/session/' + encodeURIComponent(d.conversationId) + '/title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: nextTitle }),
+        });
+        if (res.status === 401) {
+          location.reload();
+          return;
+        }
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || !out.ok) {
+          $('renameInput').disabled = false;
+          $('btnRenameSave').disabled = false;
+          $('btnRenameCancel').disabled = false;
+          setRenameNote(out.error || 'Rename failed.', 'bad');
+          $('renameInput').focus();
+          return;
+        }
+        d.title = out.title;
+        $('detailTitle').textContent = out.title;
+        cancelRename();
+        await fetchOverview();
+      } catch {
+        $('renameInput').disabled = false;
+        $('btnRenameSave').disabled = false;
+        $('btnRenameCancel').disabled = false;
+        setRenameNote('Could not reach the panel.', 'bad');
+        $('renameInput').focus();
+      }
+    }
+
     function renderDetail(d) {
       const st = statusOf(d);
       $('detailKicker').innerHTML = '<span class="dot ' + st + '"></span><span>' +
         segs([STATUS_LABEL[st], esc(d.modelLabel || '--'), 'updated ' + esc(fmtRel(d.lastActivityMs))]) + '</span>';
+      const editable = canRenameSession(d);
+      const isEditingThis = state.renamingId && state.renamingId === d.conversationId;
       $('detailTitle').textContent = d.title || d.conversationId;
+      $('detailTitle').classList.toggle('editable', editable);
+      $('detailTitle').title = editable ? 'Click or press F2 to rename' : '';
+      $('btnRenameTitle').hidden = !editable;
+      if (!isEditingThis) {
+        cancelRename();
+      }
 
       const sp = speedParts(d.speed);
       const syncTone = d.syncStatus === 'unsynced' ? 'warn' : '';
@@ -1464,6 +1595,7 @@ function renderPanelHtml() {
     }
 
     function closeDetail() {
+      cancelRename();
       state.selectedId = null;
       state.detail = null;
       state.chartFor = null;
@@ -1613,6 +1745,19 @@ function renderPanelHtml() {
     });
 
     $('btnCloseDetail').addEventListener('click', closeDetail);
+    $('btnRenameTitle').addEventListener('click', startRename);
+    $('detailTitle').addEventListener('click', () => {
+      if (canRenameSession(state.detail)) startRename();
+    });
+    $('btnRenameCancel').addEventListener('click', cancelRename);
+    $('renameForm').addEventListener('submit', submitRename);
+    $('renameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelRename();
+      }
+    });
 
     $('btnCopyResume').addEventListener('click', async () => {
       if (!state.detail?.resumeCommand) return;
@@ -1729,6 +1874,11 @@ function renderPanelHtml() {
         return;
       }
       if (!state.selectedId || $('syncModal').classList.contains('open') || $('lanModal').classList.contains('open')) return;
+      if (e.key === 'F2' && canRenameSession(state.detail)) {
+        e.preventDefault();
+        startRename();
+        return;
+      }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         moveSelection(e.key === 'ArrowDown' ? 1 : -1);

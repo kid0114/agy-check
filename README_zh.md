@@ -90,11 +90,11 @@ node scripts/bootstrap.js
 - **配额**：Gemini 与第三方（3P）两类额度的 5 小时和每周剩余量及重置时间。有多个账号时，每个账号单独一行。
 - **模型**：每个模型的会话数、轮数、输入 token、费用和缓存命中率。
 - **会话**：状态、标题、目录与分支、模型、轮数与未命中次数、命中率（整会话与最后一轮）、token、上下文占用、速度、工具与 API 耗时、费用。点击表头排序，也可以搜索、按账号筛选、显示空会话。
-- **会话详情**：点击一行打开。`↑` / `↓` 在会话之间切换，`Esc` 关闭。
+- **会话详情**：点击一行打开。`↑` / `↓` 在会话之间切换，点击标题、铅笔图标或按 `F2` 可直接重命名会话，`Esc` 关闭。改名会直接写入 `agy` 的 `conversation_summaries.db`，让 `/resume`、面板与命令行保持一致（如果该会话正处于打开中的活跃 `agy` 窗口，该窗口在下一轮对话时可能会覆盖标题）。
 
 ![会话详情](./assets/panel-session-detail.png)
 
-页面通过 Server-Sent Events 自动更新：任何 `agy` 会话日志有变化，大约一秒内数字就会刷新。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序和列开关会保存在浏览器里。
+页面通过 Server-Sent Events 自动更新：任何 `agy` 会话日志或 `conversation_summaries.db`（含 `/rename` 的 WAL 写入）有变化，大约一秒内数字和标题就会刷新。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序和列开关会保存在浏览器里。
 
 ### 在手机上查看
 
@@ -121,7 +121,7 @@ node scripts/bootstrap.js
 
 - 默认只对 Wi-Fi 和有线网卡的地址开放；虚拟机网桥和 VPN 隧道既不列出，也不响应。
 - 如果还想通过自己的网络访问（例如 VPN 组网），先保存一次该网段：`/check lan --networks 10.0.0.0/24`（多个网段用逗号分隔，`none` 清空）。
-- 已配对的手机可以查看全部内容并刷新配额；账号同步、配对码和退出登录只能在运行 `agy` 的电脑上操作。
+- 已配对的手机可以查看全部内容、刷新配额和重命名会话；账号同步、配对码和退出登录只能在运行 `agy` 的电脑上操作。
 - 手机的登录凭据是一个随机 Cookie，只保存其哈希值，与已保存的网段一起存放在 `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`（仅本人可读），因此重启后手机仍保持登录。`/check lan --revoke` 让所有手机退出登录。
 - `/check stop` 关闭面板，之后普通的 `/check` 只对本机开放；再次 `/check lan` 开启手机模式时，已配对的手机仍然有效。
 - 网络传输为明文 HTTP。只在可信网络中使用，不要把端口转发到公网。
@@ -318,12 +318,12 @@ node ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-hud.js --config
 agy-check 只读取 `agy` 和它自己的 Hook 写入的本地文件：
 
 - `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`：轮次、token 数、时间戳。
-- `~/.gemini/antigravity-cli/conversation_summaries.db`：会话标题与步数，只读打开。
+- `~/.gemini/antigravity-cli/conversation_summaries.db`：会话标题与步数（平时以 `PRAGMA query_only = ON` 只读查询，仅在你在面板中主动重命名会话时通过事务更新 `title`、`raw_summary` 与 `conversations_fts` 检索索引）。
 - `~/.gemini/antigravity-cli/speed-cache/` 与 `sessions/`：agy-check 写入的 Hook 计时与会话快照。
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`：各账号保存的配额。
 - macOS 钥匙串条目 `gemini / antigravity`：用于判断当前登录的账号并请求配额，从不打印 token。
 
-面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。两个操作（刷新配额、同步）都会拒绝跨源请求，同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。没有遥测。
+面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。所有写入操作（刷新配额、重命名会话、同步）都会拒绝跨源请求，同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。没有遥测。
 
 ---
 

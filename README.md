@@ -90,11 +90,11 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 - **Quota**: 5-hour and weekly remaining for the Gemini and third-party (3P) allowances, with reset times. With more than one account, each account gets its own row.
 - **Models**: sessions, turns, input tokens, cost and cache hit rate per model.
 - **Sessions**: status, title, directory and branch, model, turns and cache misses, hit rate (session and last turn), tokens, context use, speed, tool and API time, and cost. Click a column header to sort. You can also search, filter by account, and show empty sessions.
-- **Session detail**: click a row to open it. `↑` / `↓` move between sessions and `Esc` closes the panel.
+- **Session detail**: click a row to open it. `↑` / `↓` move between sessions, `F2` (or clicking the title / pencil icon) renames the session, and `Esc` closes the panel. Renames are written directly to `agy`'s `conversation_summaries.db` so `/resume`, the dashboard and the CLI all stay in sync (if the session is currently open in an active `agy` window, that window may overwrite the title on its next turn).
 
 ![Session detail](./assets/panel-session-detail.png)
 
-The page updates by itself through Server-Sent Events whenever an `agy` transcript changes, so numbers move within about a second of each completed turn. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order and column toggles are remembered in the browser.
+The page updates by itself through Server-Sent Events whenever an `agy` transcript or `conversation_summaries.db` (including WAL updates from `/rename`) changes, so numbers and titles move within about a second. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order and column toggles are remembered in the browser.
 
 ### On your phone
 
@@ -121,7 +121,7 @@ On the computer, the **Phone** button in the top bar shows the addresses and a f
 
 - Only Wi-Fi and Ethernet addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered.
 - To also reach it over your own network, such as a VPN overlay, save that network once: `/check lan --networks 10.0.0.0/24` (separate several with commas; `none` clears them).
-- Paired phones can view everything and refresh quota. Account sync, pairing codes and sign-out work only on the computer running `agy`.
+- Paired phones can view everything, refresh quota and rename sessions. Account sync, pairing codes and sign-out work only on the computer running `agy`.
 - The phone's sign-in is a random cookie; only its hash is stored, together with saved networks, in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json` (readable only by you), so phones stay signed in across restarts. `/check lan --revoke` signs out every phone.
 - `/check stop` turns the dashboard off; the next plain `/check` starts it for this computer only, and `/check lan` turns phone mode back on with existing phones still signed in.
 - Traffic is plain HTTP inside your network. Use it only on networks you trust and do not forward the port to the internet.
@@ -318,12 +318,12 @@ Or edit the file directly:
 agy-check only reads local files that `agy` and its own hooks write:
 
 - `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`: turns, token counts, timestamps.
-- `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts, opened read-only.
+- `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts (queried with `PRAGMA query_only = ON`, and updated in a transaction only when you rename a session from the dashboard, keeping `title`, `raw_summary` and `conversations_fts` in sync).
 - `~/.gemini/antigravity-cli/speed-cache/` and `sessions/`: hook timings and per-session snapshots written by agy-check.
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
 - The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
 
-The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its two actions (quota refresh and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
+The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
 
 ---
 
