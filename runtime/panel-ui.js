@@ -50,9 +50,12 @@ function renderPanelHtml() {
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
       font-variant-numeric: tabular-nums;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
     .muted { color: var(--muted); }
     .mono { font-family: var(--mono); }
+    .nw { white-space: nowrap; }
     code {
       font-family: var(--mono);
       font-size: 12px;
@@ -289,8 +292,8 @@ function renderPanelHtml() {
     .qrow-foot { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
     .acct-list { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
     .acct-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-2); }
-    .acct-row .acct-email { font-weight: 500; color: var(--text); }
-    .acct-row .push { margin-left: auto; }
+    .acct-row .acct-email { font-weight: 500; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acct-row .push { margin-left: auto; white-space: nowrap; }
 
     /* Models */
     .mtable { width: 100%; border-collapse: collapse; }
@@ -371,7 +374,7 @@ function renderPanelHtml() {
     .drawer-kicker { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
     .drawer-title { margin: 6px 0 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
     .drawer-actions { display: flex; align-items: center; gap: 6px; flex: none; }
-    .drawer-body { flex: 1; overflow-y: auto; }
+    .drawer-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px 22px; }
     .chip {
       display: inline-flex;
@@ -408,10 +411,14 @@ function renderPanelHtml() {
     .stat-value { margin-top: 4px; font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-value .unit { font-size: 12px; margin-left: 4px; }
     .stat-note { font-size: 12px; font-weight: 500; margin-left: 6px; }
-    .chart-wrap { padding: 18px 22px 14px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+    .chart-wrap { padding: 18px 22px 14px; border-bottom: 1px solid var(--border); }
+    .chart-body { display: flex; }
+    .chart-axis { flex: none; display: block; }
+    .chart-scroll { flex: 1; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
     .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12.5px; font-weight: 500; color: var(--text-2); }
-    .legend { font-size: 11.5px; font-weight: 400; color: var(--muted); }
-    .lg { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 5px 0 12px; vertical-align: 0; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; font-weight: 400; color: var(--muted); }
+    .lg-item { display: inline-flex; align-items: center; white-space: nowrap; }
+    .lg { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
     .lg.ok { background: var(--green); }
     .lg.warn { background: var(--amber); }
     .lg.bad { background: var(--red); }
@@ -471,6 +478,7 @@ function renderPanelHtml() {
       max-width: 720px;
       max-height: 86vh;
       overflow-y: auto;
+      overscroll-behavior: contain;
       background: var(--surface);
       border: 1px solid var(--border-strong);
       border-radius: 14px;
@@ -545,12 +553,19 @@ function renderPanelHtml() {
       .card-head, .card-body { padding: 14px 16px; }
       .providers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
       .mtable th:nth-child(2), .mtable td:nth-child(2), .mtable th:nth-child(4), .mtable td:nth-child(4) { display: none; }
-      .mtable .hitcol { width: 36%; }
-      .hitbar { gap: 8px; }
-      .hitbar span:last-child { width: 46px; }
+      .mtable td:first-child { white-space: normal; }
+      .mtable .hitcol { width: auto; text-align: right; }
+      .hitbar { justify-content: flex-end; }
+      .hitbar .meter { display: none; }
+      .hitbar span:last-child { width: auto; }
+      .acct-row { flex-wrap: wrap; row-gap: 2px; }
+      .acct-row .acct-email { flex: 1; }
+      .acct-row .acct-q { order: 3; flex-basis: 100%; padding-left: 18px; }
       .toolbar { width: 100%; }
       .toolbar .btn { flex: 1; justify-content: center; }
       .field.search { flex: 1 1 100%; height: 38px; }
+      /* iOS zooms into inputs under 16px on focus, which pushes the page past the screen edge. */
+      input.field, select.field { font-size: 16px; }
 
       .table-scroll { overflow: visible; }
       table.sessions { min-width: 0; }
@@ -558,12 +573,12 @@ function renderPanelHtml() {
       table.sessions thead { display: none; }
       #sessionsBody > tr[data-id] {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         grid-template-areas:
-          "session session cost"
-          "status status model"
-          "hit speed tokens"
-          "turns ctx tool";
+          "session session session session cost cost"
+          "status status status model model model"
+          "hit hit speed speed tokens tokens"
+          "turns turns ctx ctx tool tool";
         gap: 12px 14px;
         padding: 14px 16px;
         border-bottom: 1px solid var(--border);
@@ -597,6 +612,10 @@ function renderPanelHtml() {
       td.c-status .s { display: inline; margin-left: 8px; }
       td.c-session .title { font-size: 14.5px; }
       td.c-session .meta { white-space: normal; }
+      .meta .nw { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+      td.c-hit .hit { flex-direction: column-reverse; align-items: flex-start; gap: 6px; }
+      td.c-hit .meter.sm { width: 44px; height: 3px; }
+      td.c-hit .s { margin-top: 6px; }
       .meter.xs { margin: 6px 0 0; }
       td.c-tokens .s { white-space: normal; }
       td.c-model .v { white-space: normal; overflow-wrap: anywhere; }
@@ -924,6 +943,11 @@ function renderPanelHtml() {
       return '<div class="meter' + (cls ? ' ' + cls : '') + '"><span class="' + (tone || 'ok') + '" style="width:' + w + '%"></span></div>';
     }
 
+    // Joins HTML parts with " · " so wrapped lines break only between parts, never inside one.
+    function segs(parts) {
+      return parts.filter(Boolean).map(p => '<span class="nw">' + p + '</span>').join('&nbsp;· ');
+    }
+
     function statusOf(s) {
       return STATUS_LABEL[s && s.status] ? s.status : 'idle';
     }
@@ -1005,20 +1029,20 @@ function renderPanelHtml() {
       $('kpis').innerHTML = [
         kpi('Cache hit rate',
           '<span class="t-' + hitTone(wHit) + '">' + fmtPct(wHit) + '</span>',
-          fmtTok(summary.totalCacheRead) + ' / ' + fmtTok(summary.totalPrompt) + ' read · ' + fmtInt(summary.totalMissTurns) + ' misses',
+          segs([fmtTok(summary.totalCacheRead) + ' / ' + fmtTok(summary.totalPrompt) + ' read', fmtInt(summary.totalMissTurns) + ' misses']),
           typeof wHit === 'number' ? meter(wHit, hitTone(wHit), 'kpi-meter') : ''),
         kpi('Sessions',
           fmtInt(summary.sessionCount) + '<span class="unit">of ' + fmtInt(summary.totalSessionsAll) + '</span>',
-          fmtInt(summary.runningCount) + ' running · ' + fmtInt(summary.totalTurns) + ' turns' +
-            (unsynced > 0 ? ' · <span class="t-warn">' + unsynced + ' unsynced</span>' : '')),
+          segs([fmtInt(summary.runningCount) + ' running', fmtInt(summary.totalTurns) + ' turns',
+            unsynced > 0 ? '<span class="t-warn">' + unsynced + ' unsynced</span>' : ''])),
         kpi('Output speed',
           avgOut + '<span class="unit">t/s</span>',
-          'Net ' + avgNet + ' t/s · visible text only',
+          segs(['Net ' + avgNet + ' t/s', 'visible text only']),
           '',
           'out: total output incl. thinking | net: visible output excl. thinking'),
         kpi('Tokens',
           fmtTok((summary.totalPrompt || 0) + (summary.totalOutput || 0)),
-          fmtTok(summary.totalCacheRead) + ' cache · ' + fmtTok(summary.totalUncachedInput) + ' unc · ' + fmtTok(summary.totalOutput) + ' out'),
+          segs([fmtTok(summary.totalCacheRead) + ' cache', fmtTok(summary.totalUncachedInput) + ' unc', fmtTok(summary.totalOutput) + ' out'])),
         kpi('Est. API cost',
           fmtUsd(cost.range) + '<span class="unit">' + (RANGE_COST_UNIT[state.range] || '') + '</span>',
           '<div class="cost-ladder">' + [
@@ -1064,7 +1088,7 @@ function renderPanelHtml() {
           const cStr = '3P ' + (c?.fiveHour ? c.fiveHour.percent + '%' : '--');
           return '<div class="acct-row"><span class="dot ' + (a.isActive ? 'live' : '') + '"></span>' +
             '<span class="acct-email">' + esc(a.email) + '</span>' +
-            '<span>' + esc(gStr + ' · ' + cStr) + '</span>' +
+            '<span class="acct-q">' + esc(gStr + ' · ' + cStr) + '</span>' +
             '<span class="muted push">' + esc(fmtRel(a.lastRefreshed)) + '</span></div>';
         }).join('') + '</div>';
       }
@@ -1169,13 +1193,13 @@ function renderPanelHtml() {
         : (s.syncStatus === 'other_account' && s.accountEmail
           ? '<span class="pill" title="' + esc(s.accountEmail) + '">' + esc(s.accountEmail.split('@')[0]) + '</span>'
           : '');
-      const meta = [
+      const meta = segs([
         s.shortId,
         s.currentDir,
         s.branch,
         s.pid ? 'pid ' + s.pid : '',
         !s.hasTranscript && s.steps > 0 ? s.steps + ' steps (summary only)' : '',
-      ].filter(Boolean).join(' · ');
+      ].map(v => v && esc(v)));
 
       const hit = s.sessionHitRate;
       const hitCell = typeof hit === 'number'
@@ -1210,13 +1234,13 @@ function renderPanelHtml() {
         '<td class="c-status"><div class="status"><span class="dot ' + st + '"></span>' + STATUS_LABEL[st] + syncPill + '</div>' +
           '<div class="s" title="' + esc(fmtStamp(s.lastActivityMs)) + '">' + fmtRel(s.lastActivityMs) + '</div></td>' +
         '<td class="col-session c-session"><div class="title" title="' + esc(s.title) + '">' + esc(s.title || s.shortId) + '</div>' +
-          '<div class="meta">' + esc(meta) + '</div></td>' +
+          '<div class="meta">' + meta + '</div></td>' +
         '<td class="c-model"><div class="v model">' + esc(s.modelLabel || '--') + '</div></td>' +
         '<td class="r c-turns" data-label="Turns"><div class="v">' + fmtInt(s.turnsCount) + '</div>' +
           (s.missTurnCount > 0 ? '<div class="s t-warn" title="Turns with a diagnosed cache miss">' + s.missTurnCount + ' miss</div>' : '') + '</td>' +
         '<td class="r c-hit" data-label="Cache hit">' + hitCell + '</td>' +
         '<td class="r c-tokens" data-label="Tokens" title="' + esc(tokTip) + '"><div class="v">' + fmtTok(s.totalPrompt) + '</div>' +
-          '<div class="s">' + fmtTok(s.totalUncachedInput) + ' unc · ' + fmtTok(s.totalOutput) + ' out</div></td>' +
+          '<div class="s">' + segs([fmtTok(s.totalUncachedInput) + ' unc', fmtTok(s.totalOutput) + ' out']) + '</div></td>' +
         '<td class="r c-ctx" data-label="Context">' + ctxCell + '</td>' +
         '<td class="r c-speed" data-label="Speed t/s" title="' + esc(speedTip) + '">' + speedCell + '</td>' +
         '<td class="r c-tool" data-label="Tool"><div class="v">' + (s.toolDurationMs ? fmtDur(s.toolDurationMs) : '--') + '</div>' +
@@ -1272,30 +1296,35 @@ function renderPanelHtml() {
         return '<div class="chart-empty">No PLANNER_RESPONSE turns recorded in transcript.jsonl yet.</div>';
       }
       const n = turns.length;
-      const padL = 40;
+      const axisW = 40;
+      const padIn = 6;
       const padR = 8;
       const padT = 20;
       const chartH = 150;
-      // Fit bars to the drawer width; only very long sessions fall back to horizontal scrolling.
-      const avail = Math.max(360, $('detailChart').clientWidth - 44);
-      const slot = Math.max(3, Math.min(56, (avail - padL - padR) / n));
+      // Fit bars to the drawer width; only very long sessions scroll sideways, with the % axis pinned.
+      const wrap = $('detailChart');
+      const wrapStyle = getComputedStyle(wrap);
+      const avail = Math.max(240, wrap.clientWidth - parseFloat(wrapStyle.paddingLeft) - parseFloat(wrapStyle.paddingRight)) - axisW;
+      const slot = Math.max(3, Math.min(56, (avail - padIn - padR) / n));
       const gap = slot >= 12 ? 4 : 1;
       const barW = Math.max(1, Math.min(36, slot - gap));
-      const width = Math.max(avail, Math.ceil(padL + n * slot + padR));
+      const width = Math.max(avail, Math.ceil(padIn + n * slot + padR));
       const height = padT + chartH + 26;
       const labelEvery = Math.max(1, Math.ceil(30 / slot));
       const yOf = (p) => padT + chartH - (p / 100) * chartH;
 
-      const grid = [0, 50, 100].map(p =>
-        '<line x1="' + padL + '" y1="' + yOf(p) + '" x2="' + (width - padR) + '" y2="' + yOf(p) + '" stroke="' + CHART.grid + '" />' +
-        '<text x="' + (padL - 8) + '" y="' + (yOf(p) + 3.5) + '" fill="' + CHART.text + '" font-size="10.5" text-anchor="end">' + p + '%</text>'
+      const axis = [0, 50, 100].map(p =>
+        '<text x="' + (axisW - 8) + '" y="' + (yOf(p) + 3.5) + '" fill="' + CHART.text + '" font-size="10.5" text-anchor="end">' + p + '%</text>'
       ).join('') +
-        '<line x1="' + padL + '" y1="' + yOf(80) + '" x2="' + (width - padR) + '" y2="' + yOf(80) + '" stroke="' + CHART.ok + '" stroke-opacity="0.45" stroke-dasharray="4,4" />' +
-        '<text x="' + (padL - 8) + '" y="' + (yOf(80) + 3.5) + '" fill="' + CHART.ok + '" font-size="10.5" text-anchor="end">80%</text>';
+        '<text x="' + (axisW - 8) + '" y="' + (yOf(80) + 3.5) + '" fill="' + CHART.ok + '" font-size="10.5" text-anchor="end">80%</text>';
+      const grid = [0, 50, 100].map(p =>
+        '<line x1="0" y1="' + yOf(p) + '" x2="' + (width - padR) + '" y2="' + yOf(p) + '" stroke="' + CHART.grid + '" />'
+      ).join('') +
+        '<line x1="0" y1="' + yOf(80) + '" x2="' + (width - padR) + '" y2="' + yOf(80) + '" stroke="' + CHART.ok + '" stroke-opacity="0.45" stroke-dasharray="4,4" />';
 
       const bars = turns.map((t, idx) => {
         const rate = typeof t.hitRate === 'number' ? t.hitRate : 0;
-        const x = padL + idx * slot + (slot - barW) / 2;
+        const x = padIn + idx * slot + (slot - barW) / 2;
         const cx = x + barW / 2;
         const h = Math.max(2, (rate / 100) * chartH);
         const fill = CHART[hitTone(rate)] || CHART.bad;
@@ -1316,17 +1345,35 @@ function renderPanelHtml() {
       }).join('');
 
       return '<div class="chart-head"><span>Cache hit rate per turn</span><span class="legend">' +
-          '<i class="lg ok"></i>80%+<i class="lg warn"></i>50-80%<i class="lg bad"></i>under 50%' +
-          '<i class="lg mk-model"></i>model switch<i class="lg mk-ttl"></i>TTL gap 5m+' +
+          [['ok', '80%+'], ['warn', '50-80%'], ['bad', 'under 50%'], ['mk-model', 'model switch'], ['mk-ttl', 'TTL gap 5m+']]
+            .map(([cls, label]) => '<span class="lg-item"><i class="lg ' + cls + '"></i>' + label + '</span>').join('') +
         '</span></div>' +
-        '<svg class="chart" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" style="display:block" font-family="-apple-system, BlinkMacSystemFont, sans-serif">' +
-        grid + bars + '</svg>';
+        '<div class="chart-body">' +
+          '<svg class="chart-axis" width="' + axisW + '" height="' + height + '" viewBox="0 0 ' + axisW + ' ' + height + '" font-family="-apple-system, BlinkMacSystemFont, sans-serif">' + axis + '</svg>' +
+          '<div class="chart-scroll">' +
+            '<svg class="chart" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" style="display:block" font-family="-apple-system, BlinkMacSystemFont, sans-serif">' +
+            grid + bars + '</svg>' +
+          '</div>' +
+        '</div>';
+    }
+
+    // Redraws the turn chart, keeping the sideways scroll: a new session or a view already at the
+    // newest turn lands on the newest turn; otherwise the reader's position is kept.
+    function drawTurnChart(d) {
+      const old = $('detailChart').querySelector('.chart-scroll');
+      const keep = old && state.chartFor === d.conversationId
+        ? { left: old.scrollLeft, atEnd: old.scrollLeft + old.clientWidth >= old.scrollWidth - 2 }
+        : null;
+      $('detailChart').innerHTML = renderTurnChart(d.turns || [], d);
+      state.chartFor = d.conversationId;
+      const sc = $('detailChart').querySelector('.chart-scroll');
+      if (sc) sc.scrollLeft = !keep || keep.atEnd ? sc.scrollWidth : keep.left;
     }
 
     function renderDetail(d) {
       const st = statusOf(d);
-      $('detailKicker').innerHTML = '<span class="dot ' + st + '"></span>' + STATUS_LABEL[st] +
-        ' · ' + esc(d.modelLabel || '--') + ' · updated ' + esc(fmtRel(d.lastActivityMs));
+      $('detailKicker').innerHTML = '<span class="dot ' + st + '"></span><span>' +
+        segs([STATUS_LABEL[st], esc(d.modelLabel || '--'), 'updated ' + esc(fmtRel(d.lastActivityMs))]) + '</span>';
       $('detailTitle').textContent = d.title || d.conversationId;
 
       const sp = speedParts(d.speed);
@@ -1357,7 +1404,7 @@ function renderPanelHtml() {
       ].join('');
 
       const turns = d.turns || [];
-      $('detailChart').innerHTML = renderTurnChart(turns, d);
+      drawTurnChart(d);
       if (turns.length === 0) {
         $('detailTurnsBody').innerHTML = '<tr><td colspan="10" class="empty">' +
           (String(d.conversationId || '').startsWith('pid-')
@@ -1419,6 +1466,7 @@ function renderPanelHtml() {
     function closeDetail() {
       state.selectedId = null;
       state.detail = null;
+      state.chartFor = null;
       setDrawer(false);
       markSelectedRow();
     }
@@ -1692,7 +1740,7 @@ function renderPanelHtml() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         if (state.detail && $('drawer').classList.contains('open')) {
-          $('detailChart').innerHTML = renderTurnChart(state.detail.turns || [], state.detail);
+          drawTurnChart(state.detail);
         }
       }, 150);
     });
