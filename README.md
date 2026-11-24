@@ -80,7 +80,7 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 | `/check session [id]` | Per-turn cache detail for one session (defaults to the current one) |
 | `/check refresh` | Refresh quota, then print the session table |
 | `/check sync [--apply]` | Preview the account sync, or run it with `--apply` |
-| `/check lan [--new-token] [--networks <cidr,...>\|none]` | Let phones on the same network open the dashboard and print the link (see below) |
+| `/check lan [--networks <cidr,...>\|none] [--revoke]` | Let phones on the same network use the dashboard: prints the address and a pairing code (see below) |
 | `/check stop` | Stop the background dashboard |
 
 ### What's on the page
@@ -104,14 +104,20 @@ The dashboard normally answers only this computer. To open it on a phone on the 
 /check lan
 ```
 
-This restarts the dashboard for other devices and prints a link such as `http://192.168.1.20:18721/?t=abcd2efgh3jk`. Open it on the phone; it can also be added to the home screen. On phones, sessions show as cards and the detail panel fills the screen. On the computer, the **Phone** button in the top bar shows the links again.
+This switches the dashboard into phone mode and prints the address to open, such as `http://192.168.1.20:18721/`, plus a 6-digit pairing code.
+
+1. Open the address on the phone. Until the phone is paired, the page only asks for the code.
+2. Enter the code. It is valid for 10 minutes, works once, and is cancelled after five wrong tries.
+3. The phone then stays signed in for 30 days; after that it shows the pairing page again. It can also be added to the home screen. A home-screen app keeps its own sign-in, so pair it once from there.
+
+On the computer, the **Phone** button in the top bar shows the addresses and a fresh code, the number of signed-in phones, and **Sign out all phones**. On phones, sessions show as cards and the detail panel fills the screen.
 
 - Only Wi-Fi and Ethernet addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered.
 - To also reach it over your own network, such as a VPN overlay, save that network once: `/check lan --networks 10.0.0.0/24` (separate several with commas; `none` clears them).
-- Other devices are refused unless they bring the token in the link. The token and saved networks are kept in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`, so the link keeps working after restarts.
-- Phones can view everything and refresh quota. Account sync works only on the computer running `agy`.
-- `/check lan --new-token` issues a new link and stops old ones from working. `/check stop` turns the dashboard off; the next `/check` starts it for this computer only.
-- The link is plain HTTP. Anyone who can reach one of the listed addresses and has the link can see your sessions, account email and costs. Keep it to networks you trust and do not forward the port to the internet.
+- Paired phones can view everything and refresh quota. Account sync, pairing codes and sign-out work only on the computer running `agy`.
+- The phone's sign-in is a random cookie; only its hash is stored, together with saved networks, in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json` (readable only by you), so phones stay signed in across restarts. `/check lan --revoke` signs out every phone.
+- `/check stop` turns the dashboard off; the next plain `/check` starts it for this computer only, and `/check lan` turns phone mode back on with existing phones still signed in.
+- Traffic is plain HTTP inside your network. Use it only on networks you trust and do not forward the port to the internet.
 
 ### Why a turn missed the cache
 
@@ -157,8 +163,8 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   Start the dashboard (127.0.0.1)
-   [--lan] [--new-token]                             Also serve phones on Wi-Fi/Ethernet via a token link
-   [--networks <cidr,...>|none]                      Also serve these saved networks (e.g. a VPN overlay)
+   [--lan] [--networks <cidr,...>|none]              Phone mode: Wi-Fi/Ethernet plus saved networks, pairing code
+agy-check panel pair | revoke                        New pairing code | sign out all paired phones
 agy-check panel stop                                 Stop the background dashboard
 agy-check ls [--range 24h] [--sort recent]           Print the session table
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]

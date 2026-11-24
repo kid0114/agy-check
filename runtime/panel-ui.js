@@ -521,6 +521,8 @@ function renderPanelHtml() {
     .lan-links { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; }
     .lan-link { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
     .lan-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; padding: 0; font-size: 12.5px; color: var(--text); }
+    .pair-code-box { margin: 0 0 12px; padding: 14px; text-align: center; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+    .pair-code { margin: 4px 0; font-size: 34px; font-weight: 650; letter-spacing: 0.3em; text-indent: 0.3em; }
     .modal .small { font-size: 12px; }
 
     /* Phones: sessions become cards, the detail drawer goes full screen, touch targets grow. */
@@ -717,7 +719,7 @@ function renderPanelHtml() {
           </tbody>
         </table>
       </div>
-      <div class="table-foot muted"><span class="kbd-hint">Click a session for turn-by-turn detail · ↑ ↓ to step through sessions · Esc to close · </span>Costs are API-equivalent estimates: every model Antigravity serves (Gemini and 3P such as Opus) is priced at its Google list rate for each turn's time. Antigravity membership usage is not billed per token; models without a known price show as unpriced, never as free.</div>
+      <div class="table-foot muted"><span class="kbd-hint">Click a session for turn-by-turn detail · ↑ ↓ to step through sessions · Esc to close · </span>Costs are API-equivalent estimates: every model Antigravity serves (Gemini and 3P such as Opus) is priced at its Google list rate for each turn's time. Antigravity membership usage is not billed per token; models without a known price show as unpriced, never as free.<span id="accessNote"></span></div>
     </section>
   </main>
 
@@ -765,11 +767,18 @@ function renderPanelHtml() {
   <div id="lanModal" class="modal-backdrop">
     <div class="modal">
       <h2>Open on a phone</h2>
-      <p>Connect the phone to the same network and open one of these links. Anyone on the network who has a link can view this panel and refresh quota; account sync stays on this Mac.</p>
+      <p>On the phone, open one of these addresses and enter the pairing code. A paired phone stays signed in for 30 days and can view this panel and refresh quota; account sync stays on this Mac.</p>
       <div id="lanLinks" class="lan-links"></div>
-      <p class="muted small">New link (old ones stop working): <code>/check lan --new-token</code> · Turn off: <code>/check stop</code></p>
+      <div class="pair-code-box">
+        <div class="muted small">Pairing code</div>
+        <div id="pairCode" class="pair-code">------</div>
+        <div id="pairExpiry" class="muted small"></div>
+      </div>
+      <p id="pairDevices" class="muted small"></p>
       <div class="modal-actions">
-        <button id="btnLanClose" class="btn">Close</button>
+        <button id="btnRevokeDevices" class="btn">Sign out all phones</button>
+        <button id="btnNewCode" class="btn">New code</button>
+        <button id="btnLanClose" class="btn primary">Done</button>
       </div>
     </div>
   </div>
@@ -939,7 +948,11 @@ function renderPanelHtml() {
       const summary = data.summary || {};
       renderTopbar(auth, quota, summary);
       state.lanUrls = data.lan?.urls || [];
-      $('btnPhone').hidden = state.lanUrls.length === 0;
+      $('btnPhone').hidden = !data.lan;
+      const expiresAt = data.viewer && data.viewer.local === false ? data.viewer.accessExpiresAt : null;
+      $('accessNote').textContent = expiresAt
+        ? ' · This device is signed in until ' + new Date(expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + '.'
+        : '';
       renderBanner(auth, summary);
       $('rangeTitle').textContent = RANGES[state.range] || state.range;
       $('rangeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.range === state.range));
@@ -1433,6 +1446,10 @@ function renderPanelHtml() {
       if (state.showEmpty) qs.set('empty', '1');
       try {
         const res = await fetch('/api/overview?' + qs.toString());
+        if (res.status === 401) {
+          location.reload(); // this device was signed out; the server now shows the pairing page
+          return;
+        }
         if (!res.ok) return;
         const data = await res.json();
         if (seq !== overviewSeq) return; // a newer request superseded this one
@@ -1577,11 +1594,49 @@ function renderPanelHtml() {
     });
 
     $('btnSyncModal').addEventListener('click', openSyncModal);
-    $('btnPhone').addEventListener('click', () => {
+    let pairTimer = null;
+    function renderPairing(pair) {
+      state.lanUrls = pair.urls || state.lanUrls;
       $('lanLinks').innerHTML = state.lanUrls.map((u, i) =>
         '<div class="lan-link"><code>' + esc(u) + '</code><button class="btn sm" data-lan="' + i + '">Copy</button></div>'
-      ).join('');
+      ).join('') || '<div class="muted">No Wi-Fi/Ethernet or saved network address is up right now.</div>';
+      $('pairCode').textContent = pair.code || '------';
+      $('pairDevices').textContent = (pair.devices || 0) + ' phone(s) currently signed in.';
+      clearInterval(pairTimer);
+      const tick = () => {
+        const left = Math.max(0, Math.round(((pair.expiresAt || 0) - Date.now()) / 1000));
+        $('pairExpiry').textContent = left > 0
+          ? 'Valid for ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + ' · one use'
+          : 'Expired. Get a new code.';
+        if (left === 0) clearInterval(pairTimer);
+      };
+      tick();
+      pairTimer = setInterval(tick, 1000);
+    }
+    async function requestPairCode() {
+      try {
+        const res = await fetch('/api/pair/code', { method: 'POST' });
+        const pair = await res.json();
+        if (res.ok) renderPairing(pair);
+        else $('pairExpiry').textContent = pair.error || 'Could not get a code.';
+      } catch {
+        $('pairExpiry').textContent = 'Could not reach the panel.';
+      }
+    }
+    function closeLanModal() {
+      clearInterval(pairTimer);
+      $('lanModal').classList.remove('open');
+    }
+    $('btnPhone').addEventListener('click', () => {
       $('lanModal').classList.add('open');
+      requestPairCode();
+    });
+    $('btnNewCode').addEventListener('click', requestPairCode);
+    $('btnRevokeDevices').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/pair/revoke', { method: 'POST' });
+        if (res.ok) $('pairDevices').textContent = 'All phones signed out.';
+      } catch {}
     });
     $('lanLinks').addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-lan]');
@@ -1589,7 +1644,7 @@ function renderPanelHtml() {
       btn.textContent = 'Copied';
       setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
     });
-    $('btnLanClose').addEventListener('click', () => $('lanModal').classList.remove('open'));
+    $('btnLanClose').addEventListener('click', closeLanModal);
     $('btnDriftSync').addEventListener('click', openSyncModal);
     $('btnSyncCancel').addEventListener('click', () => $('syncModal').classList.remove('open'));
     $('btnSyncConfirm').addEventListener('click', async () => {
@@ -1620,7 +1675,7 @@ function renderPanelHtml() {
     document.addEventListener('keydown', (e) => {
       if (e.target.closest?.('input, select, textarea')) return;
       if (e.key === 'Escape') {
-        if ($('lanModal').classList.contains('open')) $('lanModal').classList.remove('open');
+        if ($('lanModal').classList.contains('open')) closeLanModal();
         else if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
         else if (state.selectedId) closeDetail();
         return;
@@ -1665,6 +1720,129 @@ function renderPanelHtml() {
 </html>`;
 }
 
+// Shown to other devices that are not paired yet: enter the 6-digit code from `/check lan`.
+function renderPairingHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0c0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="agy-check" />
+  <title>agy-check · Pair this device</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #0b0c0f;
+      color: #e9ebef;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { max-width: 380px; margin: 0 auto; padding: calc(64px + env(safe-area-inset-top)) 24px 40px; }
+    .logo {
+      width: 44px;
+      height: 44px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      color: #7c9cff;
+      background: rgba(124, 156, 255, 0.12);
+      border: 1px solid rgba(124, 156, 255, 0.35);
+    }
+    .logo svg { width: 24px; height: 24px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
+    p { margin: 0 0 24px; color: #b3b9c4; font-size: 14.5px; line-height: 1.5; }
+    code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px; padding: 1px 6px; border-radius: 5px; background: #20242b; color: #e9ebef; }
+    input {
+      width: 100%;
+      height: 56px;
+      border-radius: 12px;
+      border: 1px solid #323843;
+      background: #121419;
+      color: #e9ebef;
+      font-size: 26px;
+      letter-spacing: 0.4em;
+      text-indent: 0.4em;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      outline: none;
+    }
+    input:focus { border-color: #7c9cff; }
+    button {
+      width: 100%;
+      height: 50px;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 12px;
+      background: #7c9cff;
+      color: #0b0c0f;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    button:disabled { opacity: 0.5; }
+    .msg { min-height: 22px; margin-top: 14px; font-size: 14px; color: #f0646a; text-align: center; }
+    .foot { margin-top: 28px; font-size: 12.5px; color: #7c8491; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-6"/></svg></div>
+    <h1>Pair this device</h1>
+    <p>On the computer running agy, type <code>/check lan</code> (or open the panel and tap <b>Phone</b>), then enter the 6-digit code shown there.</p>
+    <form id="pairForm" autocomplete="off">
+      <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000" aria-label="Pairing code" autofocus />
+      <button id="pairBtn" type="submit">Pair</button>
+    </form>
+    <div id="msg" class="msg" role="status"></div>
+    <div class="foot">A paired device stays signed in for 30 days.</div>
+  </main>
+  <script>
+    const form = document.getElementById('pairForm');
+    const input = document.getElementById('code');
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('pairBtn');
+    input.addEventListener('input', () => {
+      input.value = input.value.replace(/\\D/g, '').slice(0, 6);
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (input.value.length !== 6) {
+        msg.textContent = 'Enter the 6-digit code.';
+        return;
+      }
+      btn.disabled = true;
+      msg.textContent = '';
+      try {
+        const res = await fetch('/api/pair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: input.value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          location.replace('/');
+          return;
+        }
+        msg.textContent = data.error || 'Pairing failed.';
+      } catch {
+        msg.textContent = 'Cannot reach the panel.';
+      }
+      btn.disabled = false;
+      input.select();
+    });
+  </script>
+</body>
+</html>`;
+}
+
 module.exports = {
   renderPanelHtml,
+  renderPairingHtml,
 };

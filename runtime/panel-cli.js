@@ -2,7 +2,7 @@
 
 const { spawn } = require('child_process');
 const { buildPanelOverview, getSessionDetail, formatGapShort } = require('./panel-data.js');
-const { createPanelServer, ensurePanelRunning, stopPanelDaemon, setLanNetworks, DEFAULT_PORT } = require('./panel-server.js');
+const { createPanelServer, ensurePanelRunning, stopPanelDaemon, setLanNetworks, requestPairingCode, revokePairedDevices, DEFAULT_PORT } = require('./panel-server.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { previewAccountSync, executeAccountSync } = require('./account-sync.js');
 const { ANSI_COLORS, formatTokens } = require('./renderer/format.js');
@@ -244,8 +244,8 @@ function getHelpText() {
     '',
     'Commands:',
     `  panel [--port ${DEFAULT_PORT}] [--daemon] [--open]  Start the local WebUI dashboard (127.0.0.1)`,
-    '     [--lan] [--new-token]                      Also serve phones on Wi-Fi/Ethernet via a token link',
-    '     [--networks <cidr,...>|none]               Also serve these extra networks (saved), e.g. a VPN overlay',
+    '     [--lan] [--networks <cidr,...>|none]       Let phones on Wi-Fi/Ethernet (and saved networks) pair with a code',
+    '  panel pair | panel revoke                     New phone pairing code | sign out all paired phones',
     '  panel stop                                    Stop the background WebUI panel daemon',
     '  ls [--range 24h] [--sort recent]              Print a static multi-session summary table',
     '     [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]',
@@ -300,7 +300,6 @@ async function runPanelCli(argv = process.argv.slice(2)) {
     }
 
     const lan = Boolean(flags.lan);
-    const rotateToken = lan && Boolean(flags['new-token']);
     let networksChanged = false;
     if (lan && typeof flags.networks === 'string') {
       try {
@@ -311,14 +310,26 @@ async function runPanelCli(argv = process.argv.slice(2)) {
         return 1;
       }
     }
-    const printLanUrls = (urls) => {
-      if (urls.length === 0) return;
-      process.stdout.write('Phone link (anyone on these networks with it can view):\n');
-      for (const u of urls) process.stdout.write(`  ${u}\n`);
+    const printPairing = (pair) => {
+      if (!pair || !pair.code) return;
+      process.stdout.write(`Phone access: open one of these on the phone and enter code ${pair.code} (valid 10 minutes).\n`);
+      for (const u of pair.urls || []) process.stdout.write(`  ${u}\n`);
+      process.stdout.write('A paired phone stays signed in for 30 days.\n');
     };
 
+    if (args[0] === 'pair' || args[0] === 'revoke') {
+      const res = args[0] === 'pair' ? await requestPairingCode(port) : await revokePairedDevices(port);
+      if (!res || res.error) {
+        process.stderr.write(`${res?.error || 'The panel is not running in phone mode. Start it with: agy-check panel --daemon --lan'}\n`);
+        return 1;
+      }
+      if (args[0] === 'pair') printPairing(res);
+      else process.stdout.write('Signed out all paired phones.\n');
+      return 0;
+    }
+
     if (flags.daemon) {
-      const res = await ensurePanelRunning({ port, lan, rotateToken, restart: networksChanged });
+      const res = await ensurePanelRunning({ port, lan, restart: networksChanged });
       if (!res.ok) {
         process.stderr.write(`Failed to start panel daemon: ${res.error || 'unknown error'}\n`);
         return 1;
@@ -328,15 +339,15 @@ async function runPanelCli(argv = process.argv.slice(2)) {
           ? `agy-check panel already running at ${res.url}\n`
           : `agy-check panel started in background at ${res.url} (PID ${res.pid})\n`
       );
-      printLanUrls(res.lanUrls || []);
+      if (res.lan) printPairing(await requestPairingCode(port));
       if (flags.open) openBrowserUrl(res.url);
       return 0;
     }
 
-    const panel = createPanelServer({ port, lan, rotateToken });
+    const panel = createPanelServer({ port, lan });
     const info = await panel.listen();
     process.stdout.write(`agy-check panel listening at ${info.url}\n`);
-    printLanUrls(panel.lanUrls());
+    if (lan) printPairing({ ...panel.issuePairingCode(), urls: panel.lanUrls() });
     process.stdout.write('Press Ctrl+C to stop.\n');
     if (flags.open) {
       openBrowserUrl(info.url);

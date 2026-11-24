@@ -12,7 +12,7 @@ When invoked via `/check` in Antigravity CLI, the `agy-check-slash-command` `Pre
 If hooks are disabled and this skill runs via the agent instead, execute the matching local command and return its concise English summary without modifying repository files:
 
 - `/check` or `/check panel`: `agy-check panel --daemon --open`
-- `/check lan [--new-token] [--networks <cidr,...>|none]`: `agy-check panel --daemon --lan [--new-token] [--networks ...]` (prints the phone link; Wi-Fi/Ethernet plus saved networks only)
+- `/check lan [--networks <cidr,...>|none] [--revoke]`: `agy-check panel --daemon --lan [--networks ...]` (prints the phone address and a 10-minute pairing code; paired phones stay signed in for 30 days; `--revoke` maps to `agy-check panel revoke`)
 - `/check stop`: `agy-check panel stop`
 - `/check ls [range]`: `agy-check ls --range <range>` (default `24h`)
 - `/check session [id]`: `agy-check session <id>` (defaults to the current conversation ID)

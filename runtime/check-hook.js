@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveAntigravityPath } = require('./paths.js');
 const { buildPanelOverview, getSessionDetail, formatGapShort } = require('./panel-data.js');
-const { ensurePanelRunning, stopPanelDaemon, setLanNetworks, DEFAULT_PORT } = require('./panel-server.js');
+const { ensurePanelRunning, stopPanelDaemon, setLanNetworks, requestPairingCode, revokePairedDevices, DEFAULT_PORT } = require('./panel-server.js');
 const { openBrowserUrl } = require('./panel-cli.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { previewAccountSync, executeAccountSync } = require('./account-sync.js');
@@ -89,7 +89,7 @@ function formatOverviewMarkdown(overview, options = {}) {
       lines.push(`### agy-check Panel — Opened [\`${panelInfo.url}\`](${panelInfo.url})`);
       lines.push(`- **Panel**: ${stateText}`);
       if (panelInfo.lanUrls && panelInfo.lanUrls[0]) {
-        lines.push(`- **Phone** (same Wi-Fi): [\`${panelInfo.lanUrls[0]}\`](${panelInfo.lanUrls[0]}) · all networks: \`/check lan\``);
+        lines.push(`- **Phone**: open [\`${panelInfo.lanUrls[0]}\`](${panelInfo.lanUrls[0]}) and pair with the code from \`/check lan\``);
       }
     } else {
       lines.push(`### agy-check Panel — Failed to start (\`${panelInfo.error || 'unknown error'}\`)`);
@@ -242,6 +242,8 @@ async function handleCheckHook(payload, deps = {}) {
     quotaRefresher = refreshQuotaNow,
     syncPreviewer = previewAccountSync,
     syncExecutor = executeAccountSync,
+    pairCode = requestPairingCode,
+    revokeDevices = revokePairedDevices,
   } = deps;
 
   // Since we terminate before the model runs, PostInvocation will not fire;
@@ -307,6 +309,12 @@ async function handleCheckHook(payload, deps = {}) {
   }
 
   if (subcommand === 'lan' || subcommand === 'phone') {
+    if (args.includes('--revoke')) {
+      const res = await revokeDevices(port);
+      return buildTerminateResponse(res?.ok
+        ? '### agy-check Phone Access\nSigned out all paired phones. Pair again with `/check lan`.'
+        : `### agy-check Phone Access\n${res?.error || 'The panel is not running in phone mode. Start it with `/check lan`.'}`);
+    }
     const netIdx = args.indexOf('--networks');
     let networksChanged = false;
     if (netIdx !== -1) {
@@ -318,26 +326,25 @@ async function handleCheckHook(payload, deps = {}) {
         return buildTerminateResponse(`### agy-check Phone Access\n${err.message}.`);
       }
     }
-    const info = await ensurePanel({
-      port,
-      rootDir,
-      lan: true,
-      rotateToken: args.includes('--new-token'),
-      restart: networksChanged,
-    });
+    const info = await ensurePanel({ port, rootDir, lan: true, restart: networksChanged });
     if (!info.ok) {
-      return buildTerminateResponse(`### agy-check Phone Access\nFailed to start the panel in LAN mode (\`${info.error || 'unknown error'}\`).`);
+      return buildTerminateResponse(`### agy-check Phone Access\nFailed to start the panel in phone mode (\`${info.error || 'unknown error'}\`).`);
     }
-    const [primary, ...others] = info.lanUrls || [];
+    const pair = await pairCode(port);
+    if (!pair || !pair.code) {
+      return buildTerminateResponse(`### agy-check Phone Access\nCould not get a pairing code (\`${pair?.error || 'no response from the panel'}\`).`);
+    }
+    const urls = pair.urls || [];
     const body = [
       '### agy-check Phone Access',
-      primary
-        ? `Open this on a phone on the same network:\n\n[\`${primary}\`](${primary})`
-        : 'LAN mode is on, but no Wi-Fi/Ethernet or saved network address is up right now.',
-      others.length > 0 ? `\nAlso reachable at:\n${others.map(u => `- \`${u}\``).join('\n')}` : '',
+      urls.length > 0
+        ? `On the phone, open:\n${urls.map(u => `- [\`${u}\`](${u})`).join('\n')}`
+        : 'Phone mode is on, but no Wi-Fi/Ethernet or saved network address is up right now.',
       '',
-      'Only Wi-Fi/Ethernet and networks saved with `--networks` are served; VM bridges and other tunnels are ignored. Anyone who can reach these addresses and has the link can view the panel and refresh quota. Account sync stays on this machine.',
-      'Add a network: `/check lan --networks 10.0.0.0/24` (`none` clears) · New link: `/check lan --new-token` · Turn off: `/check stop`',
+      `Then enter pairing code **${pair.code}** (valid 10 minutes, one use). The phone stays signed in for 30 days.`,
+      '',
+      'Only Wi-Fi/Ethernet and networks saved with `--networks` are served. Paired phones can view the panel and refresh quota; account sync stays on this machine.',
+      'Add a network: `/check lan --networks 10.0.0.0/24` (`none` clears) · Sign out all phones: `/check lan --revoke` · Turn off: `/check stop`',
     ].join('\n');
     return buildTerminateResponse(body);
   }

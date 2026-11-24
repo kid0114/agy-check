@@ -10,15 +10,18 @@ const { resolveAntigravityPath } = require('./paths.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { buildPanelOverview, getSessionDetail } = require('./panel-data.js');
 const { inspectLiveAuth, previewAccountSync, executeAccountSync } = require('./account-sync.js');
-const { renderPanelHtml } = require('./panel-ui.js');
+const { renderPanelHtml, renderPairingHtml } = require('./panel-ui.js');
 
 const DEFAULT_HOST = '127.0.0.1';
 const LAN_HOST = '0.0.0.0';
 const DEFAULT_PORT = 18721;
 const DEBOUNCE_MS = 500;
 const AUTH_POLL_INTERVAL_MS = 4000;
-const TOKEN_COOKIE = 'agy_check_token';
-const TOKEN_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'; // 32 symbols, no l/o/0/1
+const SESSION_COOKIE = 'agy_check_session';
+const DEVICE_ACCESS_MS = 30 * 24 * 60 * 60 * 1000;
+const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
+const PAIRING_MAX_ATTEMPTS = 5;
+const MAX_PAIRED_DEVICES = 20;
 
 function getPanelPidPath(rootDir = null) {
   const baseDir = rootDir || resolveAntigravityPath('');
@@ -46,15 +49,22 @@ function parseCidr(cidr) {
   return { base: (base & mask) >>> 0, mask };
 }
 
-function readLanSettings(rootDir = null) {
+function hashDeviceToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// LAN settings: extra networks to serve, and paired devices (sha256 of each 30-day session cookie).
+function readLanSettings(rootDir = null, now = Date.now()) {
   try {
     const raw = JSON.parse(fs.readFileSync(getPanelLanSettingsPath(rootDir), 'utf8'));
     return {
-      token: typeof raw.token === 'string' && /^[a-z2-9]{12}$/.test(raw.token) ? raw.token : null,
       networks: Array.isArray(raw.networks) ? raw.networks.filter(n => parseCidr(n)) : [],
+      devices: Array.isArray(raw.devices)
+        ? raw.devices.filter(d => d && typeof d.hash === 'string' && typeof d.expiresAt === 'number' && d.expiresAt > now)
+        : [],
     };
   } catch {
-    return { token: null, networks: [] };
+    return { networks: [], devices: [] };
   }
 }
 
@@ -63,16 +73,6 @@ function writeLanSettings(rootDir, settings) {
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(settingsPath, JSON.stringify(settings), { mode: 0o600 });
   fs.chmodSync(settingsPath, 0o600);
-}
-
-// LAN access token: 12 symbols (60 bits), short enough to type on a phone. Stored 0600 so
-// phone bookmarks survive restarts; `rotate` issues a new one and invalidates old links.
-function readOrCreatePanelToken(rootDir = null, options = {}) {
-  const settings = readLanSettings(rootDir);
-  if (!options.rotate && settings.token) return settings.token;
-  const token = Array.from(crypto.randomBytes(12), b => TOKEN_ALPHABET[b & 31]).join('');
-  writeLanSettings(rootDir, { ...settings, token });
-  return token;
 }
 
 /**
@@ -104,8 +104,40 @@ function getLanAddresses(networks = [], interfaces = os.networkInterfaces()) {
   return entries.sort((a, b) => a.rank - b.rank).map(e => e.address);
 }
 
-function getLanUrls(port, token, networks = []) {
-  return getLanAddresses(networks).map(a => `http://${a}:${port}/?t=${token}`);
+function getLanUrls(port, networks = []) {
+  return getLanAddresses(networks).map(a => `http://${a}:${port}/`);
+}
+
+function postLocal(port, pathname) {
+  return new Promise((resolve) => {
+    const req = http.request({ host: DEFAULT_HOST, port, path: pathname, method: 'POST', timeout: 2000 }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+// Asks the running LAN panel for a one-time pairing code (valid 10 minutes).
+function requestPairingCode(port = DEFAULT_PORT) {
+  return postLocal(port, '/api/pair/code');
+}
+
+// Signs out every paired device.
+function revokePairedDevices(port = DEFAULT_PORT) {
+  return postLocal(port, '/api/pair/revoke');
 }
 
 function readPanelPidRecord(rootDir = null) {
@@ -170,11 +202,11 @@ async function ensurePanelRunning(options = {}) {
   const url = `http://${DEFAULT_HOST}:${port}`;
   const cliScriptPath = options.cliScriptPath || path.join(__dirname, 'bin', 'agy-check.js');
   const wantLan = options.lan === true;
-  const withLanUrls = (lan) => (lan ? getLanUrls(port, readOrCreatePanelToken(rootDir), readLanSettings(rootDir).networks) : []);
+  const withLanUrls = (lan) => (lan ? getLanUrls(port, readLanSettings(rootDir).networks) : []);
 
   const initial = await checkPanelHealth(port, 400);
-  // A running local-only panel, a new token, or changed networks all need a LAN restart.
-  const needsRestart = initial.healthy && wantLan && (!initial.data?.lan || options.rotateToken === true || options.restart === true);
+  // A running local-only panel, or changed networks, needs a LAN restart.
+  const needsRestart = initial.healthy && wantLan && (!initial.data?.lan || options.restart === true);
   if (initial.healthy && !needsRestart) {
     const rec = readPanelPidRecord(rootDir);
     const lan = Boolean(initial.data?.lan);
@@ -186,7 +218,6 @@ async function ensurePanelRunning(options = {}) {
 
   const cliArgs = [cliScriptPath, 'panel', '--port', String(port)];
   if (wantLan) cliArgs.push('--lan');
-  if (wantLan && options.rotateToken === true) cliArgs.push('--new-token');
 
   let child;
   try {
@@ -253,6 +284,14 @@ function isLoopbackHost(headerVal) {
 
 function isLoopbackAddress(addr) {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
+function describeDevice(userAgent) {
+  const ua = String(userAgent || '');
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  if (/Android/.test(ua)) return 'Android';
+  return 'Browser';
 }
 
 // "Local" means the request really comes from this machine and names a loopback host
@@ -379,9 +418,49 @@ function createPanelServer(options = {}) {
   const lan = options.lan === true;
   const host = lan ? LAN_HOST : DEFAULT_HOST;
   const port = Number.isInteger(options.port) ? options.port : DEFAULT_PORT;
-  // Requests from other devices are only served in LAN mode, and only with this token.
-  const lanToken = lan ? (options.accessToken || readOrCreatePanelToken(rootDir, { rotate: options.rotateToken === true })) : null;
   const lanNetworks = lan ? readLanSettings(rootDir).networks : [];
+  // Paired devices hold a random 30-day session cookie; only its sha256 is kept, on disk, so restarts keep them signed in.
+  let devices = lan ? readLanSettings(rootDir).devices : [];
+  let pairing = null; // { code, expiresAt, attempts }
+  const saveDevices = () => writeLanSettings(rootDir, { ...readLanSettings(rootDir), devices });
+  const activeDevices = () => devices.filter(d => d.expiresAt > Date.now());
+  const findDevice = (token) => {
+    if (!token) return null;
+    const hash = Buffer.from(hashDeviceToken(token));
+    return activeDevices().find(d => {
+      const stored = Buffer.from(d.hash);
+      return stored.length === hash.length && crypto.timingSafeEqual(stored, hash);
+    }) || null;
+  };
+  const issuePairingCode = () => {
+    pairing = {
+      code: String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'),
+      expiresAt: Date.now() + PAIRING_CODE_TTL_MS,
+      attempts: 0,
+    };
+    return pairing;
+  };
+  const redeemPairingCode = (code, agent) => {
+    if (!pairing || pairing.expiresAt <= Date.now()) {
+      pairing = null;
+      return { error: 'No active pairing code. Get one on the Mac with /check lan.' };
+    }
+    pairing.attempts += 1;
+    if (!tokensMatch(String(code || '').trim(), pairing.code)) {
+      if (pairing.attempts >= PAIRING_MAX_ATTEMPTS) {
+        pairing = null;
+        return { error: 'Too many wrong codes. Get a new one on the Mac with /check lan.' };
+      }
+      return { error: 'Wrong code.' };
+    }
+    pairing = null;
+    const token = crypto.randomBytes(32).toString('base64url');
+    const now = Date.now();
+    devices = [...activeDevices(), { hash: hashDeviceToken(token), agent, pairedAt: now, expiresAt: now + DEVICE_ACCESS_MS }]
+      .slice(-MAX_PAIRED_DEVICES);
+    saveDevices();
+    return { token, expiresAt: now + DEVICE_ACCESS_MS };
+  };
   const listeningPort = () => {
     const addr = server.address();
     return typeof addr === 'object' && addr ? addr.port : port;
@@ -496,12 +575,12 @@ function createPanelServer(options = {}) {
   }
 
   const html = renderPanelHtml();
+  const pairingHtml = renderPairingHtml();
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
     const pathname = reqUrl.pathname;
     const local = isLocalClient(req);
-    const queryTokenValid = !local && tokensMatch(reqUrl.searchParams.get('t'), lanToken);
 
     // Other devices are answered only on Wi-Fi/Ethernet or a saved network, never on VM bridges or other tunnels.
     const localAddress = String(req.socket?.localAddress || '').replace(/^::ffff:/, '');
@@ -511,22 +590,74 @@ function createPanelServer(options = {}) {
       return;
     }
 
-    if (!local && !(queryTokenValid || tokensMatch(readCookie(req, TOKEN_COOKIE), lanToken))) {
-      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end('agy-check: open the phone link shown by `/check lan` (it ends with ?t=...).\n');
+    // Unpaired devices only get the pairing page and the code exchange.
+    const device = local ? null : findDevice(readCookie(req, SESSION_COOKIE));
+    if (!local && !device) {
+      if (req.method === 'GET' && pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(pairingHtml);
+        return;
+      }
+      if (req.method === 'POST' && pathname === '/api/pair') {
+        if (!isSameOriginRemoteRequest(req)) {
+          sendJson(res, 403, { error: 'Forbidden origin' });
+          return;
+        }
+        let body = null;
+        try {
+          body = await readJsonBody(req, 1024);
+        } catch {
+          body = null;
+        }
+        const result = redeemPairingCode(body?.code, describeDevice(req.headers['user-agent']));
+        if (result.error) {
+          sendJson(res, 400, { ok: false, error: result.error });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Set-Cookie': `${SESSION_COOKIE}=${result.token}; Path=/; Max-Age=${DEVICE_ACCESS_MS / 1000}; HttpOnly; SameSite=Strict`,
+        });
+        res.end(JSON.stringify({ ok: true, expiresAt: result.expiresAt }));
+        return;
+      }
+      sendJson(res, 401, { error: 'This device is not paired. Open the panel address and enter the code from /check lan.' });
       return;
     }
 
     try {
+      if (req.method === 'POST' && (pathname === '/api/pair/code' || pathname === '/api/pair/revoke')) {
+        if (!local || !isSameOriginLocalRequest(req)) {
+          sendJson(res, 403, { error: 'Pairing is managed on the machine running agy' });
+          return;
+        }
+        if (!lan) {
+          sendJson(res, 409, { error: 'Phone access is off. Start it with /check lan.' });
+          return;
+        }
+        if (pathname === '/api/pair/code') {
+          const p = issuePairingCode();
+          sendJson(res, 200, { code: p.code, expiresAt: p.expiresAt, devices: activeDevices().length, urls: getLanUrls(listeningPort(), lanNetworks) });
+          return;
+        }
+        devices = [];
+        pairing = null;
+        saveDevices();
+        for (const client of sseClients) {
+          if (client.agyRemote) {
+            try { client.end(); } catch {}
+          }
+        }
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
       if (req.method === 'GET' && pathname === '/') {
-        const headers = {
+        res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
-        };
-        if (queryTokenValid) {
-          headers['Set-Cookie'] = `${TOKEN_COOKIE}=${lanToken}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`;
-        }
-        res.writeHead(200, headers);
+        });
         res.end(html);
         return;
       }
@@ -550,9 +681,9 @@ function createPanelServer(options = {}) {
           account,
           includeEmpty,
         });
-        overview.viewer = { local };
-        if (local && lanToken) {
-          overview.lan = { urls: getLanUrls(listeningPort(), lanToken, lanNetworks) };
+        overview.viewer = local ? { local: true } : { local: false, accessExpiresAt: device.expiresAt };
+        if (local && lan) {
+          overview.lan = { urls: getLanUrls(listeningPort(), lanNetworks), devices: activeDevices().length };
         }
         if (!local) {
           // Sync stops agy windows on this Mac, so it is never offered to other devices.
@@ -580,6 +711,7 @@ function createPanelServer(options = {}) {
           'Connection': 'keep-alive',
         });
         res.write(`event: ready\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+        res.agyRemote = !local;
         sseClients.add(res);
         startWatchers();
         req.on('close', () => {
@@ -654,7 +786,8 @@ function createPanelServer(options = {}) {
     host,
     port,
     lan,
-    lanUrls: () => (lanToken ? getLanUrls(listeningPort(), lanToken, lanNetworks) : []),
+    lanUrls: () => (lan ? getLanUrls(listeningPort(), lanNetworks) : []),
+    issuePairingCode: () => (lan ? issuePairingCode() : null),
     listen: () => new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {
@@ -676,10 +809,11 @@ module.exports = {
   getPanelPidPath,
   getPanelLanSettingsPath,
   readLanSettings,
-  readOrCreatePanelToken,
   setLanNetworks,
   getLanAddresses,
   getLanUrls,
+  requestPairingCode,
+  revokePairedDevices,
   readPanelPidRecord,
   checkPanelHealth,
   ensurePanelRunning,

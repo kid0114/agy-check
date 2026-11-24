@@ -35,7 +35,6 @@ const {
 const { getSpeedCachePath } = require('../../runtime/speed.js');
 const {
   createPanelServer,
-  readOrCreatePanelToken,
   getPanelLanSettingsPath,
   setLanNetworks,
   getLanAddresses,
@@ -337,7 +336,7 @@ describe('multi-session panel & account-sync', () => {
     }
   });
 
-  test('LAN mode serves other devices only with the token link and keeps account sync on the Mac', async () => {
+  test('LAN mode pairs devices with a one-time code, keeps them signed in for 30 days, and keeps sync on the Mac', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-check-lan-'));
     const http = require('node:http');
     // Requests reach 127.0.0.1 but name another host, which the server treats as a LAN device.
@@ -352,11 +351,6 @@ describe('multi-session panel & account-sync', () => {
       req.end();
     });
     try {
-      const token = readOrCreatePanelToken(tmp);
-      assert.match(token, /^[a-z2-9]{12}$/);
-      assert.equal(readOrCreatePanelToken(tmp), token, 'token survives restarts');
-      assert.equal(fs.statSync(getPanelLanSettingsPath(tmp)).mode & 0o777, 0o600);
-
       // Only Wi-Fi/Ethernet plus saved networks are served; VM bridges and other tunnels are not.
       const ifaces = {
         lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
@@ -369,10 +363,10 @@ describe('multi-session panel & account-sync', () => {
       assert.deepEqual(getLanAddresses(['10.20.0.0/24'], ifaces), ['192.168.1.20', '10.20.0.3']);
       assert.throws(() => setLanNetworks(tmp, ['10.20.0.0/33']), /Invalid network/);
       assert.deepEqual(setLanNetworks(tmp, ['10.20.0.0/24']), ['10.20.0.0/24']);
-      assert.equal(readOrCreatePanelToken(tmp), token, 'saving networks keeps the token');
+      assert.equal(fs.statSync(getPanelLanSettingsPath(tmp)).mode & 0o777, 0o600);
 
       let refreshed = 0;
-      const panel = createPanelServer({
+      const lanServer = () => createPanelServer({
         rootDir: tmp,
         port: 0,
         lan: true,
@@ -384,23 +378,46 @@ describe('multi-session panel & account-sync', () => {
           quotaFetcher: async () => [],
         },
       });
-      const { port } = await panel.listen();
+
+      let panel = lanServer();
+      let { port } = await panel.listen();
+      let cookie = '';
       try {
         const lanHost = { Host: `lan.test:${port}` };
-        assert.equal((await send(port, '/', { headers: lanHost })).status, 401);
-        assert.equal((await send(port, '/?t=wrongtoken12', { headers: lanHost })).status, 401);
-        assert.equal((await send(port, '/api/overview', { headers: lanHost })).status, 401);
+        const pairHeaders = { ...lanHost, Origin: `http://lan.test:${port}`, 'Content-Type': 'application/json' };
+        const pair = (code) => send(port, '/api/pair', { method: 'POST', headers: pairHeaders, body: JSON.stringify({ code }) });
 
-        const page = await send(port, `/?t=${token}`, { headers: lanHost });
+        // Unpaired devices only get the pairing page.
+        const page = await send(port, '/', { headers: lanHost });
         assert.equal(page.status, 200);
-        const cookie = String(page.headers['set-cookie']).split(';')[0];
-        assert.match(cookie, new RegExp(`^agy_check_token=${token}$`));
+        assert.match(page.text, /Pair this device/);
+        assert.equal(CJK_RE.test(page.text), false);
+        assert.equal((await send(port, '/api/overview', { headers: lanHost })).status, 401);
+        assert.equal((await pair('123456')).status, 400, 'no code issued yet');
+
+        // Codes are issued only to the Mac and allow five tries.
+        assert.equal((await send(port, '/api/pair/code', { method: 'POST', headers: pairHeaders })).status, 401);
+        const first = JSON.parse((await send(port, '/api/pair/code', { method: 'POST' })).text);
+        assert.match(first.code, /^\d{6}$/);
+        const wrong = first.code === '000000' ? '111111' : '000000';
+        for (let i = 0; i < 5; i += 1) assert.equal((await pair(wrong)).status, 400);
+        assert.equal((await pair(first.code)).status, 400, 'the code is burned after five wrong tries');
+
+        const second = JSON.parse((await send(port, '/api/pair/code', { method: 'POST' })).text);
+        const ok = await pair(second.code);
+        assert.equal(ok.status, 200);
+        const setCookie = String(ok.headers['set-cookie']);
+        assert.match(setCookie, /Max-Age=2592000/);
+        assert.match(setCookie, /HttpOnly/);
+        cookie = setCookie.split(';')[0];
+        assert.equal((await pair(second.code)).status, 400, 'codes are single-use');
 
         const remote = { ...lanHost, Cookie: cookie };
         const ov = JSON.parse((await send(port, '/api/overview?range=all', { headers: remote })).text);
         assert.equal(ov.viewer.local, false);
+        assert.ok(Math.abs(ov.viewer.accessExpiresAt - (Date.now() + 30 * 86_400_000)) < 60_000);
         assert.equal(ov.auth.syncBridgeAvailable, false);
-        assert.equal(ov.lan, undefined, 'phones never receive the token list');
+        assert.equal(ov.lan, undefined);
 
         const sameOrigin = { ...remote, Origin: `http://lan.test:${port}`, 'Content-Type': 'application/json' };
         assert.equal((await send(port, '/api/quota/refresh', { method: 'POST', headers: remote })).status, 403);
@@ -408,11 +425,26 @@ describe('multi-session panel & account-sync', () => {
         assert.equal(refreshed, 1);
         assert.equal((await send(port, '/api/sync/preview', { headers: remote })).status, 403);
         assert.equal((await send(port, '/api/sync/execute', { method: 'POST', headers: sameOrigin, body: '{"confirm":true}' })).status, 403);
+        assert.equal((await send(port, '/api/pair/revoke', { method: 'POST', headers: sameOrigin })).status, 403);
 
         const localOv = JSON.parse((await send(port, '/api/overview?range=all')).text);
         assert.equal(localOv.viewer.local, true);
-        assert.ok(Array.isArray(localOv.lan.urls));
-        for (const u of localOv.lan.urls) assert.ok(u.endsWith(`:${port}/?t=${token}`));
+        assert.equal(localOv.lan.devices, 1);
+      } finally {
+        await panel.close();
+      }
+
+      // Only a hash of the session is stored, and the device stays signed in across a restart until revoked.
+      const stored = fs.readFileSync(getPanelLanSettingsPath(tmp), 'utf8');
+      assert.equal(stored.includes(cookie.split('=')[1]), false);
+      assert.deepEqual(JSON.parse(stored).networks, ['10.20.0.0/24']);
+      panel = lanServer();
+      ({ port } = await panel.listen());
+      try {
+        const remote = { Host: `lan.test:${port}`, Cookie: cookie };
+        assert.equal((await send(port, '/api/overview', { headers: remote })).status, 200);
+        assert.equal((await send(port, '/api/pair/revoke', { method: 'POST' })).status, 200);
+        assert.equal((await send(port, '/api/overview', { headers: remote })).status, 401);
       } finally {
         await panel.close();
       }
