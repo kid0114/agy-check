@@ -29,6 +29,7 @@ const {
   diagnoseTurnCacheMiss,
   readSpeedCacheForConversation,
   resolveSessionSpeed,
+  buildQuotaOverview,
   buildPanelOverview,
   getSessionDetail,
 } = require('../../runtime/panel-data.js');
@@ -690,5 +691,39 @@ describe('multi-session panel & account-sync', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  test('buildQuotaOverview keeps gemini-4-argon under Google when providerQuota omits a separate argon bucket', () => {
+    const now = Date.UTC(2026, 10, 24, 13, 0, 0);
+    const fiveH = new Date(now + 3 * 3600_000).toISOString();
+    const wk = new Date(now + 6 * 86_400_000).toISOString();
+    const models = [
+      {
+        id: 'gemini-4-argon-high',
+        displayName: 'Gemini 4 Argon (High)',
+        modelProvider: 'MODEL_PROVIDER_GOOGLE',
+        remainingFraction: 0.97,
+        resetTime: fiveH,
+        windows: {
+          fiveHour: { remainingFraction: 0.97, resetTime: fiveH, observedAt: now },
+          weekly: { remainingFraction: 0.83, resetTime: wk, observedAt: now },
+        },
+      },
+    ];
+    const providerQuota = {
+      google: {
+        fiveHour: { remainingFraction: 0.97, resetTime: fiveH },
+        weekly: { remainingFraction: 0.83, resetTime: wk },
+      },
+      claude: {
+        fiveHour: { remainingFraction: 1, resetTime: fiveH },
+        weekly: { remainingFraction: 0.47, resetTime: wk },
+      },
+    };
+
+    const ov = buildQuotaOverview(models, providerQuota, now);
+    assert.deepEqual(ov.providers.map(p => p.key), ['google', 'claude']);
+    assert.equal(ov.providers[0].fiveHour.percent, 97);
+    assert.equal(ov.providers[0].weekly.percent, 83);
   });
 });

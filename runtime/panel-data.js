@@ -544,9 +544,13 @@ function buildQuotaOverview(quotaModels, providerQuotaRaw, now = Date.now()) {
     argon: { key: 'argon', label: 'Argon', fiveHour: null, weekly: null },
   };
 
+  const pq = providerQuotaRaw || quotaModels?.providerQuota || null;
+  const hasDedicatedArgon = Boolean(pq && typeof pq === 'object' && (pq.argon?.fiveHour || pq.argon?.weekly));
+  const suppressModelArgon = Boolean(pq && typeof pq === 'object' && !hasDedicatedArgon);
+
   for (const q of Array.isArray(quotaModels) ? quotaModels : []) {
     if (!q || isImageModel(q)) continue;
-    const isArgon = /argon/i.test(q.id || q.displayName || '');
+    const isArgon = !suppressModelArgon && /argon/i.test(q.id || q.displayName || '');
     const isGoogle = !isArgon && (q.modelProvider === 'MODEL_PROVIDER_GOOGLE' || /gemini/i.test(q.id || q.displayName || ''));
     const isClaude = q.modelProvider === 'MODEL_PROVIDER_ANTHROPIC' || /claude/i.test(q.id || q.displayName || '') || /gpt/i.test(q.id || q.displayName || '');
     const key = isArgon ? 'argon' : isGoogle ? 'google' : isClaude ? 'claude' : null;
@@ -585,7 +589,6 @@ function buildQuotaOverview(quotaModels, providerQuotaRaw, now = Date.now()) {
     }
   }
 
-  const pq = providerQuotaRaw || quotaModels?.providerQuota || null;
   if (pq && typeof pq === 'object') {
     for (const key of ['google', 'claude', 'argon']) {
       if (pq[key]?.fiveHour && !isObservationExpired(pq[key].fiveHour, now)) {

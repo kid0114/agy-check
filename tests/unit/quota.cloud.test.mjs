@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { quotaModule, withEnv } from './_helpers/quota-test-utils.mjs';
 
 const {
+  buildHeaders,
+  getAgyCliVersion,
+  DEFAULT_CLI_VERSION,
   fetchQuotaFromCloud,
   fetchTierFromCloud,
   fetchAccountEmail,
@@ -12,6 +15,33 @@ const {
 } = quotaModule;
 
 describe('quota / cloud', () => {
+  describe('buildHeaders / getAgyCliVersion', () => {
+    test('sends Antigravity CLI User-Agent format required for Gemini weekly summary buckets', async () => {
+      await withEnv({ AGY_HUD_CLI_VERSION: '1.5.16' }, () => {
+        const headers = buildHeaders('tok-123');
+        assert.equal(headers.Authorization, 'Bearer tok-123');
+        assert.match(headers['User-Agent'], /^antigravity\/cli\/1\.5\.16 \(aidev_client; os_type=(darwin|linux|windows); arch=(arm64|amd64|386)\)$/);
+      });
+    });
+
+    test('extracts semver from agy --version and falls back safely when agy is missing', () => {
+      assert.equal(
+        getAgyCliVersion({
+          env: {},
+          executableResolver: () => '/usr/local/bin/agy',
+          execSyncFn: () => 'agy 1.9.2\n',
+        }),
+        '1.9.2'
+      );
+      assert.equal(
+        getAgyCliVersion({
+          env: {},
+          executableResolver: () => null,
+        }),
+        DEFAULT_CLI_VERSION
+      );
+    });
+  });
   describe('fetchAccountEmail', () => {
     test('returns the email from the userinfo response', async () => {
       const originalFetch = globalThis.fetch;
@@ -454,6 +484,21 @@ describe('quota / cloud', () => {
       assert.equal(enriched[2].windows.fiveHour, undefined);
 
       assert.deepEqual(enriched[3].windows, {});
+    });
+
+    test('enriches gemini-4-argon with google windows when summary has no separate argon bucket', () => {
+      const models = [
+        { id: 'gemini-4-argon-high', displayName: 'Gemini 4 Argon (High)', modelProvider: 'MODEL_PROVIDER_GOOGLE', windows: {} },
+      ];
+      const summary = {
+        google: {
+          weekly: { remainingFraction: 0.83, resetTime: '2026-11-30T20:00:00Z' },
+          fiveHour: { remainingFraction: 0.97, resetTime: '2026-11-24T17:00:00Z' },
+        },
+      };
+      const enriched = enrichModelsWithQuotaSummary(models, summary, 123456);
+      assert.equal(enriched[0].windows.weekly.remainingFraction, 0.83);
+      assert.equal(enriched[0].windows.fiveHour.remainingFraction, 0.97);
     });
 
     test('returns original models when summary is null', () => {

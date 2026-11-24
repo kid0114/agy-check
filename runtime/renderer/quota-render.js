@@ -76,9 +76,13 @@ function createQuotaRenderers(ctx) {
       Argon: { fiveHour: null, weekly: null },
     };
 
+    const pq = data?.providerQuota;
+    const hasDedicatedArgon = Boolean(pq && typeof pq === 'object' && (pq.argon?.fiveHour || pq.argon?.weekly));
+    const suppressModelArgon = Boolean(pq && typeof pq === 'object' && !hasDedicatedArgon);
+
     for (const q of data || []) {
       if (!q || isImageModel(q)) continue;
-      const isArgon = /argon/i.test(q.id || q.displayName);
+      const isArgon = !suppressModelArgon && /argon/i.test(q.id || q.displayName);
       const isGoogle = !isArgon && (q.modelProvider === 'MODEL_PROVIDER_GOOGLE' || /gemini/i.test(q.id || q.displayName));
       const isClaude = q.modelProvider === 'MODEL_PROVIDER_ANTHROPIC' || /claude/i.test(q.id || q.displayName) || /gpt/i.test(q.id || q.displayName);
       const key = isArgon ? 'Argon' : isGoogle ? 'Google' : isClaude ? 'Claude' : null;
@@ -125,7 +129,6 @@ function createQuotaRenderers(ctx) {
     }
 
     // Provider summaries are authoritative and must win over model-derived data.
-    const pq = data?.providerQuota;
     if (pq && typeof pq === 'object') {
       if (pq.google?.fiveHour && !isObservationExpired(pq.google.fiveHour, now)) providerWindows.Google.fiveHour = pq.google.fiveHour;
       if (pq.google?.weekly && !isObservationExpired(pq.google.weekly, now)) providerWindows.Google.weekly = pq.google.weekly;
@@ -136,14 +139,22 @@ function createQuotaRenderers(ctx) {
     }
 
     const renderWindowItem = (label, win) => {
-      const targetWin = win || { remainingFraction: 1.0, resetTime: null };
-      const pct = formatQuotaPercent(targetWin.remainingFraction);
+      const namePart = truncateAndPad(label, 11);
+      const coloredName = `${cyan}${namePart}${reset}`;
+
+      if (!win) {
+        const barPart = `${gray}[${glyph.empty.repeat(6)}]${reset}`;
+        const pctStr = '--'.padStart(4, ' ');
+        const coloredPct = `${gray}${pctStr}${reset}`;
+        const timePart = ''.padEnd(6, ' ');
+        const coloredTime = `${gray}${timePart}${reset}`;
+        return `${coloredName} ${barPart} ${coloredPct} ${coloredTime}`;
+      }
+
+      const pct = formatQuotaPercent(win.remainingFraction);
       const pctColor = pct <= (1 - critThresh) * 100 ? red
                      : pct <= (1 - warnThresh) * 100 ? yellow
                      : green;
-
-      const namePart = truncateAndPad(label, 11);
-      const coloredName = `${cyan}${namePart}${reset}`;
 
       const barPart = createProgressBar(pct, pctColor, 6, false);
 
@@ -151,8 +162,8 @@ function createQuotaRenderers(ctx) {
       const coloredPct = `${pctColor}${pctStr}${reset}`;
 
       let rawTime = '';
-      if (targetWin.resetTime) {
-        const resetMs = new Date(targetWin.resetTime).getTime();
+      if (win.resetTime) {
+        const resetMs = new Date(win.resetTime).getTime();
         const secsLeft = Math.max(0, Math.round((resetMs - now) / 1000));
         rawTime = `~${formatDuration(secsLeft)}`;
       }

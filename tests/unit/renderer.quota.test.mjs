@@ -142,6 +142,42 @@ describe('renderer / quota lines', () => {
       assert.match(clean, /Argon week\s+\[[█░]+\]\s+65%\s+~5d/);
     });
 
+    test('renders -- instead of fake 100% for missing windows and avoids phantom Argon row when providerQuota has no argon', () => {
+      const state = { steps: 5, branch: 'dev' };
+      const agyData = {
+        context_window: { total_input_tokens: 1000, total_output_tokens: 200, used_percentage: 5 },
+      };
+      const now = Date.now();
+      const fiveH = new Date(now + 3 * 3600 * 1000).toISOString();
+      const wk = new Date(now + 6 * 86400 * 1000).toISOString();
+      const quotaData = [{
+        id: 'gemini-4-argon-high',
+        displayName: 'Gemini 4 Argon (High)',
+        modelProvider: 'MODEL_PROVIDER_GOOGLE',
+        remainingFraction: 0.97,
+        resetTime: fiveH,
+        windows: { fiveHour: { remainingFraction: 0.97, resetTime: fiveH, observedAt: now } },
+      }];
+      quotaData.providerQuota = {
+        google: { fiveHour: { remainingFraction: 0.97, resetTime: fiveH } },
+        claude: {
+          fiveHour: { remainingFraction: 1.0, resetTime: fiveH },
+          weekly: { remainingFraction: 0.47, resetTime: wk },
+        },
+      };
+
+      const clean = renderHUD(state, agyData, { display: { useNerdFonts: false, unicode: true } }, quotaData)
+        .replace(/\x1b\[[0-9;]*m/g, '');
+      const lines = clean.split('\n');
+      const g5Line = lines.find(l => l.includes('Google 5h')) || '';
+      const gwLine = lines.find(l => l.includes('Google week')) || '';
+
+      assert.match(gwLine, /Google week\s+\[░{6}\]\s+--/);
+      assert.doesNotMatch(gwLine, /Google week.*100%/);
+      assert.equal(g5Line.indexOf('│'), gwLine.indexOf('│'), 'vertical separator stays aligned with -- placeholder');
+      assert.doesNotMatch(clean, /Argon/);
+    });
+
     test('models mode renders individual model rows in two columns', () => {
       const state = { steps: 5, branch: 'dev' };
       const agyData = {

@@ -267,6 +267,9 @@ module.exports = {
   selectUsableTokens: tokenMod.selectUsableTokens,
   anyTokenFileExists,
   // cloud module
+  DEFAULT_CLI_VERSION: cloudMod.DEFAULT_CLI_VERSION,
+  getAgyCliVersion: cloudMod.getAgyCliVersion,
+  buildHeaders: cloudMod.buildHeaders,
   fetchQuotaFromCloud,
   fetchTierFromCloud,
   fetchAccountEmail,

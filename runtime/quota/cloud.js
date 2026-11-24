@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+const { resolveSafeExecutable } = require('../paths.js');
 const {
   FALLBACK_AGENT_MODEL_IDS,
   discoverAgentModelIds,
@@ -15,33 +17,66 @@ const DEFAULT_ENDPOINTS = [
   'https://daily-cloudcode-pa.googleapis.com',
 ];
 
+// Fallback Antigravity CLI version when `agy --version` cannot be probed.
+// daily-cloudcode-pa gates the Gemini Models group on client UA format/version.
+const DEFAULT_CLI_VERSION = '1.5.16';
+
 // ─── Runtime User-Agent ──────────────────────────────────────────────────────
-let _pkg = null;
-function getPackageVersion() {
-  if (_pkg) return _pkg;
+let _cliVersion = null;
+function getAgyCliVersion(options = {}) {
+  const {
+    env = process.env,
+    forceRefresh = false,
+    executableResolver = resolveSafeExecutable,
+    execSyncFn = execFileSync,
+  } = options;
+
+  const envOverride = env && typeof env.AGY_HUD_CLI_VERSION === 'string'
+    ? env.AGY_HUD_CLI_VERSION.trim()
+    : '';
+  if (envOverride) return envOverride;
+
+  const useCache = !forceRefresh && executableResolver === resolveSafeExecutable && execSyncFn === execFileSync;
+  if (useCache && _cliVersion) return _cliVersion;
+
+  let detected = DEFAULT_CLI_VERSION;
   try {
-    _pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')).version;
+    const agyBin = executableResolver('agy');
+    if (agyBin) {
+      const raw = execSyncFn(agyBin, ['--version'], {
+        encoding: 'utf8',
+        timeout: 1000,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const match = String(raw || '').match(/\b(\d+\.\d+\.\d+(?:[-+][^\s]+)?)\b/);
+      if (match) detected = match[1];
+    }
   } catch {
-    _pkg = '0.0.0';
+    // Fall back to DEFAULT_CLI_VERSION when agy is unavailable or times out.
   }
-  return _pkg;
+
+  if (useCache) _cliVersion = detected;
+  return detected;
 }
 
-function getPlatformArch() {
+function getPlatformAndArch() {
   const plat = { darwin: 'darwin', linux: 'linux', win32: 'windows' }[process.platform] || process.platform;
   const arch = { x64: 'amd64', arm64: 'arm64', ia32: '386' }[process.arch] || process.arch;
-  return `${plat}/${arch}`;
+  return { plat, arch };
 }
 
 /**
- * Build headers matching what agy sends.
+ * Build headers matching what Antigravity CLI sends.
  * @param {string} accessToken
  */
 function buildHeaders(accessToken) {
+  const { plat, arch } = getPlatformAndArch();
+  const cliVersion = getAgyCliVersion();
   return {
     'Authorization': `Bearer ${accessToken}`,
     'Content-Type': 'application/json',
-    'User-Agent': `antigravity/${getPackageVersion()} ${getPlatformArch()}`,
+    'User-Agent': `antigravity/cli/${cliVersion} (aidev_client; os_type=${plat}; arch=${arch})`,
     'X-Goog-Api-Client': `gl-node/${process.versions.node}`,
     'Client-Metadata': JSON.stringify({
       ideType: 'IDE_UNSPECIFIED',
@@ -230,7 +265,8 @@ function enrichModelsWithQuotaSummary(models, summary, now = Date.now()) {
   if (!hasGoogle && !hasClaude && !hasArgon) return models;
   return models.map(m => {
     if (!m || !m.id) return m;
-    const isArgon = /argon/i.test(m.id) || /argon/i.test(m.displayName || '');
+    const isArgonModel = /argon/i.test(m.id) || /argon/i.test(m.displayName || '');
+    const isArgon = Boolean(hasArgon && isArgonModel);
     const isGoogle = !isArgon && (m.modelProvider === 'MODEL_PROVIDER_GOOGLE' || /gemini/i.test(m.id) || /gemini/i.test(m.displayName || ''));
     const isClaude = m.modelProvider === 'MODEL_PROVIDER_ANTHROPIC' || /claude/i.test(m.id) || /claude/i.test(m.displayName || '') || /gpt/i.test(m.id) || /gpt/i.test(m.displayName || '');
     const key = isArgon ? 'argon' : isGoogle ? 'google' : isClaude ? 'claude' : null;
@@ -374,6 +410,8 @@ async function fetchQuotaFromCloud(accessToken) {
 
 module.exports = {
   DEFAULT_ENDPOINTS,
+  DEFAULT_CLI_VERSION,
+  getAgyCliVersion,
   buildHeaders,
   resolveEndpoints,
   extractTierName,
