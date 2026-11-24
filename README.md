@@ -112,6 +112,13 @@ This switches the dashboard into phone mode and prints the address to open, such
 
 On the computer, the **Phone** button in the top bar shows the addresses and a fresh code, the number of signed-in phones, and **Sign out all phones**. On phones, sessions show as cards and the detail panel fills the screen.
 
+<p align="center">
+  <img src="./assets/phone-pair.png" alt="Pairing page" width="200">
+  <img src="./assets/phone-overview.png" alt="Overview on a phone" width="200">
+  <img src="./assets/phone-sessions.png" alt="Session cards" width="200">
+  <img src="./assets/phone-detail.png" alt="Session detail on a phone" width="200">
+</p>
+
 - Only Wi-Fi and Ethernet addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered.
 - To also reach it over your own network, such as a VPN overlay, save that network once: `/check lan --networks 10.0.0.0/24` (separate several with commas; `none` clears them).
 - Paired phones can view everything and refresh quota. Account sync, pairing codes and sign-out work only on the computer running `agy`.

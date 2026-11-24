@@ -112,6 +112,13 @@ node scripts/bootstrap.js
 
 在电脑上，顶栏的 **Phone** 按钮会显示访问地址和新的配对码、当前已登录的手机数量，以及 **Sign out all phones**（让所有手机退出登录）。手机上会话以卡片显示，详情面板占满全屏。
 
+<p align="center">
+  <img src="./assets/phone-pair.png" alt="配对页面" width="200">
+  <img src="./assets/phone-overview.png" alt="手机上的总览" width="200">
+  <img src="./assets/phone-sessions.png" alt="会话卡片" width="200">
+  <img src="./assets/phone-detail.png" alt="手机上的会话详情" width="200">
+</p>
+
 - 默认只对 Wi-Fi 和有线网卡的地址开放；虚拟机网桥和 VPN 隧道既不列出，也不响应。
 - 如果还想通过自己的网络访问（例如 VPN 组网），先保存一次该网段：`/check lan --networks 10.0.0.0/24`（多个网段用逗号分隔，`none` 清空）。
 - 已配对的手机可以查看全部内容并刷新配额；账号同步、配对码和退出登录只能在运行 `agy` 的电脑上操作。
