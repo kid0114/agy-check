@@ -80,6 +80,7 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 | `/check session [id]` | Per-turn cache detail for one session (defaults to the current one) |
 | `/check refresh` | Refresh quota, then print the session table |
 | `/check sync [--apply]` | Preview the account sync, or run it with `--apply` |
+| `/check lan [--new-token] [--networks <cidr,...>\|none]` | Let phones on the same network open the dashboard and print the link (see below) |
 | `/check stop` | Stop the background dashboard |
 
 ### What's on the page
@@ -94,6 +95,23 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 ![Session detail](./assets/panel-session-detail.png)
 
 The page updates by itself through Server-Sent Events whenever an `agy` transcript changes, so numbers move within about a second of each completed turn. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order and column toggles are remembered in the browser.
+
+### On your phone
+
+The dashboard normally answers only this computer. To open it on a phone on the same network, type in `agy`:
+
+```text
+/check lan
+```
+
+This restarts the dashboard for other devices and prints a link such as `http://192.168.1.20:18721/?t=abcd2efgh3jk`. Open it on the phone; it can also be added to the home screen. On phones, sessions show as cards and the detail panel fills the screen. On the computer, the **Phone** button in the top bar shows the links again.
+
+- Only Wi-Fi and Ethernet addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered.
+- To also reach it over your own network, such as a VPN overlay, save that network once: `/check lan --networks 10.0.0.0/24` (separate several with commas; `none` clears them).
+- Other devices are refused unless they bring the token in the link. The token and saved networks are kept in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`, so the link keeps working after restarts.
+- Phones can view everything and refresh quota. Account sync works only on the computer running `agy`.
+- `/check lan --new-token` issues a new link and stops old ones from working. `/check stop` turns the dashboard off; the next `/check` starts it for this computer only.
+- The link is plain HTTP. Anyone who can reach one of the listed addresses and has the link can see your sessions, account email and costs. Keep it to networks you trust and do not forward the port to the internet.
 
 ### Why a turn missed the cache
 
@@ -139,6 +157,8 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   Start the dashboard (127.0.0.1)
+   [--lan] [--new-token]                             Also serve phones on Wi-Fi/Ethernet via a token link
+   [--networks <cidr,...>|none]                      Also serve these saved networks (e.g. a VPN overlay)
 agy-check panel stop                                 Stop the background dashboard
 agy-check ls [--range 24h] [--sort recent]           Print the session table
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
@@ -290,7 +310,7 @@ agy-check only reads local files that `agy` and its own hooks write:
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
 - The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
 
-The dashboard binds to `127.0.0.1` only, and its two actions (quota refresh and sync) reject cross-origin requests. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
+The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its two actions (quota refresh and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
 
 ---
 

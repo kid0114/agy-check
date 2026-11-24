@@ -80,6 +80,7 @@ node scripts/bootstrap.js
 | `/check session [id]` | 查看某个会话的逐轮缓存详情（默认当前会话） |
 | `/check refresh` | 刷新配额后输出会话表 |
 | `/check sync [--apply]` | 预览账号同步，加 `--apply` 则实际执行 |
+| `/check lan [--new-token] [--networks <cidr,...>\|none]` | 允许同一网络中的手机打开面板，并输出链接（见下文） |
 | `/check stop` | 停止后台面板 |
 
 ### 页面内容
@@ -94,6 +95,23 @@ node scripts/bootstrap.js
 ![会话详情](./assets/panel-session-detail.png)
 
 页面通过 Server-Sent Events 自动更新：任何 `agy` 会话日志有变化，大约一秒内数字就会刷新。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序和列开关会保存在浏览器里。
+
+### 在手机上查看
+
+面板默认只响应本机。要在同一网络中的手机上打开，在 `agy` 中输入：
+
+```text
+/check lan
+```
+
+面板会重新启动并对其他设备开放，然后输出一个链接，例如 `http://192.168.1.20:18721/?t=abcd2efgh3jk`。在手机上打开即可，也可以添加到主屏幕。手机上会话以卡片显示，详情面板占满全屏。在电脑上，顶栏的 **Phone** 按钮可以再次查看这些链接。
+
+- 默认只对 Wi-Fi 和有线网卡的地址开放；虚拟机网桥和 VPN 隧道既不列出，也不响应。
+- 如果还想通过自己的网络访问（例如 VPN 组网），先保存一次该网段：`/check lan --networks 10.0.0.0/24`（多个网段用逗号分隔，`none` 清空）。
+- 其他设备必须带着链接里的令牌才能访问。令牌和已保存的网段存放在 `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`，重启后链接依然有效。
+- 手机可以查看全部内容并刷新配额；账号同步只能在运行 `agy` 的电脑上操作。
+- `/check lan --new-token` 生成新链接，旧链接随即失效。`/check stop` 关闭面板，之后再用 `/check` 启动时只对本机开放。
+- 链接走明文 HTTP。任何能访问所列地址并持有链接的人，都能看到你的会话、账号邮箱和费用。只在可信网络中使用，不要把端口转发到公网。
 
 ### 为什么某一轮没命中缓存
 
@@ -139,6 +157,8 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   启动面板（127.0.0.1）
+   [--lan] [--new-token]                             同时通过带令牌的链接向 Wi-Fi/有线网络中的手机开放
+   [--networks <cidr,...>|none]                      另外开放这些已保存的网段（例如 VPN 组网）
 agy-check panel stop                                 停止后台面板
 agy-check ls [--range 24h] [--sort recent]           输出会话表
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
@@ -290,7 +310,7 @@ agy-check 只读取 `agy` 和它自己的 Hook 写入的本地文件：
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`：各账号保存的配额。
 - macOS 钥匙串条目 `gemini / antigravity`：用于判断当前登录的账号并请求配额，从不打印 token。
 
-面板只绑定 `127.0.0.1`，两个操作（刷新配额、同步）都会拒绝跨源请求。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。没有遥测。
+面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。两个操作（刷新配额、同步）都会拒绝跨源请求，同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。没有遥测。
 
 ---
 

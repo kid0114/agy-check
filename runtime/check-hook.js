@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveAntigravityPath } = require('./paths.js');
 const { buildPanelOverview, getSessionDetail, formatGapShort } = require('./panel-data.js');
-const { ensurePanelRunning, stopPanelDaemon, DEFAULT_PORT } = require('./panel-server.js');
+const { ensurePanelRunning, stopPanelDaemon, setLanNetworks, DEFAULT_PORT } = require('./panel-server.js');
 const { openBrowserUrl } = require('./panel-cli.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { previewAccountSync, executeAccountSync } = require('./account-sync.js');
@@ -88,6 +88,9 @@ function formatOverviewMarkdown(overview, options = {}) {
       const stateText = panelInfo.alreadyRunning ? 'already running' : `started (PID ${panelInfo.pid || '?'})`;
       lines.push(`### agy-check Panel — Opened [\`${panelInfo.url}\`](${panelInfo.url})`);
       lines.push(`- **Panel**: ${stateText}`);
+      if (panelInfo.lanUrls && panelInfo.lanUrls[0]) {
+        lines.push(`- **Phone** (same Wi-Fi): [\`${panelInfo.lanUrls[0]}\`](${panelInfo.lanUrls[0]}) · all networks: \`/check lan\``);
+      }
     } else {
       lines.push(`### agy-check Panel — Failed to start (\`${panelInfo.error || 'unknown error'}\`)`);
     }
@@ -150,7 +153,7 @@ function formatOverviewMarkdown(overview, options = {}) {
   }
 
   lines.push('');
-  lines.push('_Shortcuts: `/check` (open panel) · `/check ls [active|24h|today|7d|30d|all]` · `/check session [id]` · `/check refresh` · `/check sync [--apply]` · `/check stop`_');
+  lines.push('_Shortcuts: `/check` (open panel) · `/check lan` (phone link) · `/check ls [active|24h|today|7d|30d|all]` · `/check session [id]` · `/check refresh` · `/check sync [--apply]` · `/check stop`_');
   return lines.join('\n');
 }
 
@@ -301,6 +304,42 @@ async function handleCheckHook(payload, deps = {}) {
       : '24h';
     const overview = await overviewBuilder({ rootDir, range });
     return buildTerminateResponse(formatOverviewMarkdown(overview, { limit: 15 }));
+  }
+
+  if (subcommand === 'lan' || subcommand === 'phone') {
+    const netIdx = args.indexOf('--networks');
+    let networksChanged = false;
+    if (netIdx !== -1) {
+      const value = args[netIdx + 1] || '';
+      try {
+        setLanNetworks(rootDir, value === 'none' ? [] : value.split(','));
+        networksChanged = true;
+      } catch (err) {
+        return buildTerminateResponse(`### agy-check Phone Access\n${err.message}.`);
+      }
+    }
+    const info = await ensurePanel({
+      port,
+      rootDir,
+      lan: true,
+      rotateToken: args.includes('--new-token'),
+      restart: networksChanged,
+    });
+    if (!info.ok) {
+      return buildTerminateResponse(`### agy-check Phone Access\nFailed to start the panel in LAN mode (\`${info.error || 'unknown error'}\`).`);
+    }
+    const [primary, ...others] = info.lanUrls || [];
+    const body = [
+      '### agy-check Phone Access',
+      primary
+        ? `Open this on a phone on the same network:\n\n[\`${primary}\`](${primary})`
+        : 'LAN mode is on, but no Wi-Fi/Ethernet or saved network address is up right now.',
+      others.length > 0 ? `\nAlso reachable at:\n${others.map(u => `- \`${u}\``).join('\n')}` : '',
+      '',
+      'Only Wi-Fi/Ethernet and networks saved with `--networks` are served; VM bridges and other tunnels are ignored. Anyone who can reach these addresses and has the link can view the panel and refresh quota. Account sync stays on this machine.',
+      'Add a network: `/check lan --networks 10.0.0.0/24` (`none` clears) · New link: `/check lan --new-token` · Turn off: `/check stop`',
+    ].join('\n');
+    return buildTerminateResponse(body);
   }
 
   // Default: `/check` or `/check panel` -> ensure background server is up,

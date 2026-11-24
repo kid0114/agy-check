@@ -33,7 +33,13 @@ const {
   getSessionDetail,
 } = require('../../runtime/panel-data.js');
 const { getSpeedCachePath } = require('../../runtime/speed.js');
-const { createPanelServer } = require('../../runtime/panel-server.js');
+const {
+  createPanelServer,
+  readOrCreatePanelToken,
+  getPanelLanSettingsPath,
+  setLanNetworks,
+  getLanAddresses,
+} = require('../../runtime/panel-server.js');
 const { renderPanelHtml } = require('../../runtime/panel-ui.js');
 const { formatOverviewTable, formatSessionDetailText, parseCliArgs } = require('../../runtime/panel-cli.js');
 const { parseCheckInput, handleCheckHook } = require('../../runtime/check-hook.js');
@@ -323,6 +329,90 @@ describe('multi-session panel & account-sync', () => {
           args: [],
           flags: { range: '7d', json: true },
         });
+      } finally {
+        await panel.close();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('LAN mode serves other devices only with the token link and keeps account sync on the Mac', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-check-lan-'));
+    const http = require('node:http');
+    // Requests reach 127.0.0.1 but name another host, which the server treats as a LAN device.
+    const send = (port, reqPath, { method = 'GET', headers = {}, body = null } = {}) => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: reqPath, method, headers }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
+    });
+    try {
+      const token = readOrCreatePanelToken(tmp);
+      assert.match(token, /^[a-z2-9]{12}$/);
+      assert.equal(readOrCreatePanelToken(tmp), token, 'token survives restarts');
+      assert.equal(fs.statSync(getPanelLanSettingsPath(tmp)).mode & 0o777, 0o600);
+
+      // Only Wi-Fi/Ethernet plus saved networks are served; VM bridges and other tunnels are not.
+      const ifaces = {
+        lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
+        en0: [{ family: 'IPv4', address: '192.168.1.20', internal: false }],
+        bridge100: [{ family: 'IPv4', address: '192.168.64.1', internal: false }],
+        utun4: [{ family: 'IPv4', address: '10.20.0.3', internal: false }],
+        utun5: [{ family: 'IPv4', address: '10.99.0.7', internal: false }],
+      };
+      assert.deepEqual(getLanAddresses([], ifaces), ['192.168.1.20']);
+      assert.deepEqual(getLanAddresses(['10.20.0.0/24'], ifaces), ['192.168.1.20', '10.20.0.3']);
+      assert.throws(() => setLanNetworks(tmp, ['10.20.0.0/33']), /Invalid network/);
+      assert.deepEqual(setLanNetworks(tmp, ['10.20.0.0/24']), ['10.20.0.0/24']);
+      assert.equal(readOrCreatePanelToken(tmp), token, 'saving networks keeps the token');
+
+      let refreshed = 0;
+      const panel = createPanelServer({
+        rootDir: tmp,
+        port: 0,
+        lan: true,
+        quotaRefresher: async () => { refreshed += 1; return { ok: true }; },
+        syncExecutor: async () => ({ ok: true }),
+        dataOptions: {
+          authOptions: { tokenReader: () => ({ accessToken: 'tok', email: 'u@example.com', sourceFormat: 'macos-keychain' }) },
+          runningSessions: [],
+          quotaFetcher: async () => [],
+        },
+      });
+      const { port } = await panel.listen();
+      try {
+        const lanHost = { Host: `lan.test:${port}` };
+        assert.equal((await send(port, '/', { headers: lanHost })).status, 401);
+        assert.equal((await send(port, '/?t=wrongtoken12', { headers: lanHost })).status, 401);
+        assert.equal((await send(port, '/api/overview', { headers: lanHost })).status, 401);
+
+        const page = await send(port, `/?t=${token}`, { headers: lanHost });
+        assert.equal(page.status, 200);
+        const cookie = String(page.headers['set-cookie']).split(';')[0];
+        assert.match(cookie, new RegExp(`^agy_check_token=${token}$`));
+
+        const remote = { ...lanHost, Cookie: cookie };
+        const ov = JSON.parse((await send(port, '/api/overview?range=all', { headers: remote })).text);
+        assert.equal(ov.viewer.local, false);
+        assert.equal(ov.auth.syncBridgeAvailable, false);
+        assert.equal(ov.lan, undefined, 'phones never receive the token list');
+
+        const sameOrigin = { ...remote, Origin: `http://lan.test:${port}`, 'Content-Type': 'application/json' };
+        assert.equal((await send(port, '/api/quota/refresh', { method: 'POST', headers: remote })).status, 403);
+        assert.equal((await send(port, '/api/quota/refresh', { method: 'POST', headers: sameOrigin })).status, 200);
+        assert.equal(refreshed, 1);
+        assert.equal((await send(port, '/api/sync/preview', { headers: remote })).status, 403);
+        assert.equal((await send(port, '/api/sync/execute', { method: 'POST', headers: sameOrigin, body: '{"confirm":true}' })).status, 403);
+
+        const localOv = JSON.parse((await send(port, '/api/overview?range=all')).text);
+        assert.equal(localOv.viewer.local, true);
+        assert.ok(Array.isArray(localOv.lan.urls));
+        for (const u of localOv.lan.urls) assert.ok(u.endsWith(`:${port}/?t=${token}`));
       } finally {
         await panel.close();
       }

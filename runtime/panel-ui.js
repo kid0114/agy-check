@@ -5,7 +5,12 @@ function renderPanelHtml() {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0c0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="agy-check" />
   <title>agy-check · Sessions &amp; Quota</title>
   <style>
     :root {
@@ -510,6 +515,104 @@ function renderPanelHtml() {
       .stat:nth-child(n) { border-left: 0; border-top: 1px solid var(--border); }
       .field.search { width: 100%; }
     }
+    @media (hover: none) {
+      .kbd-hint { display: none; }
+    }
+    .lan-links { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; }
+    .lan-link { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+    .lan-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; padding: 0; font-size: 12.5px; color: var(--text); }
+    .modal .small { font-size: 12px; }
+
+    /* Phones: sessions become cards, the detail drawer goes full screen, touch targets grow. */
+    @media (max-width: 760px) {
+      .topbar-inner { padding: calc(10px + env(safe-area-inset-top)) 16px 10px; gap: 10px; }
+      .top-right { width: 100%; justify-content: space-between; gap: 10px; flex-wrap: nowrap; }
+      .acct { min-width: 0; flex: 1; justify-content: flex-end; }
+      .acct > .muted, #tierBadge { display: none !important; }
+      #acctEmail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+      .app { padding: 18px 14px calc(40px + env(safe-area-inset-bottom)); gap: 14px; }
+      .page-head h1 { font-size: 19px; }
+      .page-sub { display: none; }
+      .seg { width: 100%; }
+      .seg button { flex: 1; padding: 0 4px; height: 36px; }
+      .btn { min-height: 38px; }
+      .btn.sm { min-height: 34px; }
+      .kpi { padding: 14px 16px; }
+      .kpi-value { font-size: 22px; }
+      .kpi:last-child { grid-column: 1 / -1; border-top: 1px solid var(--border); }
+      .card-head, .card-body { padding: 14px 16px; }
+      .providers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+      .mtable th:nth-child(2), .mtable td:nth-child(2), .mtable th:nth-child(4), .mtable td:nth-child(4) { display: none; }
+      .mtable .hitcol { width: 36%; }
+      .hitbar { gap: 8px; }
+      .hitbar span:last-child { width: 46px; }
+      .toolbar { width: 100%; }
+      .toolbar .btn { flex: 1; justify-content: center; }
+      .field.search { flex: 1 1 100%; height: 38px; }
+
+      .table-scroll { overflow: visible; }
+      table.sessions { min-width: 0; }
+      table.sessions, table.sessions tbody { display: block; width: 100%; }
+      table.sessions thead { display: none; }
+      #sessionsBody > tr[data-id] {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-areas:
+          "session session cost"
+          "status status model"
+          "hit speed tokens"
+          "turns ctx tool";
+        gap: 12px 14px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      #sessionsBody > tr[data-id] > td,
+      #sessionsBody > tr[data-id]:hover > td,
+      #sessionsBody > tr.selected > td {
+        display: block;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        text-align: left;
+        background: transparent;
+      }
+      #sessionsBody > tr[data-id] > td:first-child { box-shadow: none; }
+      #sessionsBody > tr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+      #sessionsBody > tr.unsynced { box-shadow: inset 3px 0 0 var(--amber); }
+      #sessionsBody > tr:not([data-id]) > td { display: block; }
+      #sessionsBody > tr[data-id] > td.c-cost, #sessionsBody > tr[data-id] > td.c-model { text-align: right; }
+      td.c-session { grid-area: session; width: auto; max-width: none; }
+      td.c-cost { grid-area: cost; }
+      td.c-status { grid-area: status; }
+      td.c-model { grid-area: model; }
+      td.c-hit { grid-area: hit; }
+      td.c-speed { grid-area: speed; }
+      td.c-tokens { grid-area: tokens; }
+      td.c-turns { grid-area: turns; }
+      td.c-ctx { grid-area: ctx; }
+      td.c-tool { grid-area: tool; }
+      td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 3px; font-size: 11px; color: var(--muted); }
+      td.c-status .s { display: inline; margin-left: 8px; }
+      td.c-session .title { font-size: 14.5px; }
+      td.c-session .meta { white-space: normal; }
+      .meter.xs { margin: 6px 0 0; }
+      td.c-tokens .s { white-space: normal; }
+      td.c-model .v { white-space: normal; overflow-wrap: anywhere; }
+      .table-foot { padding: 12px 16px; }
+
+      .drawer-head { padding: calc(14px + env(safe-area-inset-top)) 16px 12px; }
+      #btnCopyResumeLabel { display: none; }
+      .chips { padding: 12px 16px; }
+      .stat { padding: 12px 16px; }
+      .stat-value { font-size: 16px; }
+      .chart-wrap { padding: 14px 16px 10px; }
+      .turns-head { padding: 14px 16px 6px; }
+      table.turns th:nth-child(n + 2):nth-child(-n + 7), table.turns td:nth-child(n + 2):nth-child(-n + 7) { display: none; }
+      table.turns th:first-child, table.turns td:first-child { padding-left: 16px; }
+      table.turns th:last-child, table.turns td:last-child { padding-right: 16px; }
+      table.turns td.diag { min-width: 0; }
+      .modal { padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
+    }
   </style>
 </head>
 <body>
@@ -523,6 +626,10 @@ function renderPanelHtml() {
       <div class="top-right">
         <span id="rangeCost" class="cost-pill" title="Estimated API cost for the selected range; updates after every completed turn"><span class="k">24h</span>--</span>
         <span class="acct"><span class="muted">Account</span><span id="acctEmail">--</span><span id="tierBadge" class="tier" hidden></span></span>
+        <button id="btnPhone" class="btn ghost sm" hidden title="Open this panel on a phone on the same network">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+          Phone
+        </button>
         <button id="btnSyncModal" class="btn ghost sm" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13l-3-3"/><path d="M20 17H7l3 3"/></svg>
           Sync sessions
@@ -610,7 +717,7 @@ function renderPanelHtml() {
           </tbody>
         </table>
       </div>
-      <div class="table-foot muted">Click a session for turn-by-turn detail · ↑ ↓ to step through sessions · Esc to close · Costs are API-equivalent estimates: every model Antigravity serves (Gemini and 3P such as Opus) is priced at its Google list rate for each turn's time. Antigravity membership usage is not billed per token; models without a known price show as unpriced, never as free.</div>
+      <div class="table-foot muted"><span class="kbd-hint">Click a session for turn-by-turn detail · ↑ ↓ to step through sessions · Esc to close · </span>Costs are API-equivalent estimates: every model Antigravity serves (Gemini and 3P such as Opus) is priced at its Google list rate for each turn's time. Antigravity membership usage is not billed per token; models without a known price show as unpriced, never as free.</div>
     </section>
   </main>
 
@@ -654,6 +761,18 @@ function renderPanelHtml() {
       </table>
     </div>
   </aside>
+
+  <div id="lanModal" class="modal-backdrop">
+    <div class="modal">
+      <h2>Open on a phone</h2>
+      <p>Connect the phone to the same network and open one of these links. Anyone on the network who has a link can view this panel and refresh quota; account sync stays on this Mac.</p>
+      <div id="lanLinks" class="lan-links"></div>
+      <p class="muted small">New link (old ones stop working): <code>/check lan --new-token</code> · Turn off: <code>/check stop</code></p>
+      <div class="modal-actions">
+        <button id="btnLanClose" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
 
   <div id="syncModal" class="modal-backdrop">
     <div class="modal">
@@ -819,6 +938,8 @@ function renderPanelHtml() {
       const quota = data.quota || {};
       const summary = data.summary || {};
       renderTopbar(auth, quota, summary);
+      state.lanUrls = data.lan?.urls || [];
+      $('btnPhone').hidden = state.lanUrls.length === 0;
       renderBanner(auth, summary);
       $('rangeTitle').textContent = RANGES[state.range] || state.range;
       $('rangeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.range === state.range));
@@ -1073,21 +1194,21 @@ function renderPanelHtml() {
       ].filter(Boolean).join(' ');
 
       return '<tr class="' + rowCls + '" data-id="' + esc(s.conversationId) + '">' +
-        '<td><div class="status"><span class="dot ' + st + '"></span>' + STATUS_LABEL[st] + syncPill + '</div>' +
+        '<td class="c-status"><div class="status"><span class="dot ' + st + '"></span>' + STATUS_LABEL[st] + syncPill + '</div>' +
           '<div class="s" title="' + esc(fmtStamp(s.lastActivityMs)) + '">' + fmtRel(s.lastActivityMs) + '</div></td>' +
-        '<td class="col-session"><div class="title" title="' + esc(s.title) + '">' + esc(s.title || s.shortId) + '</div>' +
+        '<td class="col-session c-session"><div class="title" title="' + esc(s.title) + '">' + esc(s.title || s.shortId) + '</div>' +
           '<div class="meta">' + esc(meta) + '</div></td>' +
-        '<td><div class="v model">' + esc(s.modelLabel || '--') + '</div></td>' +
-        '<td class="r"><div class="v">' + fmtInt(s.turnsCount) + '</div>' +
+        '<td class="c-model"><div class="v model">' + esc(s.modelLabel || '--') + '</div></td>' +
+        '<td class="r c-turns" data-label="Turns"><div class="v">' + fmtInt(s.turnsCount) + '</div>' +
           (s.missTurnCount > 0 ? '<div class="s t-warn" title="Turns with a diagnosed cache miss">' + s.missTurnCount + ' miss</div>' : '') + '</td>' +
-        '<td class="r">' + hitCell + '</td>' +
-        '<td class="r" title="' + esc(tokTip) + '"><div class="v">' + fmtTok(s.totalPrompt) + '</div>' +
+        '<td class="r c-hit" data-label="Cache hit">' + hitCell + '</td>' +
+        '<td class="r c-tokens" data-label="Tokens" title="' + esc(tokTip) + '"><div class="v">' + fmtTok(s.totalPrompt) + '</div>' +
           '<div class="s">' + fmtTok(s.totalUncachedInput) + ' unc · ' + fmtTok(s.totalOutput) + ' out</div></td>' +
-        '<td class="r">' + ctxCell + '</td>' +
-        '<td class="r" title="' + esc(speedTip) + '">' + speedCell + '</td>' +
-        '<td class="r"><div class="v">' + (s.toolDurationMs ? fmtDur(s.toolDurationMs) : '--') + '</div>' +
+        '<td class="r c-ctx" data-label="Context">' + ctxCell + '</td>' +
+        '<td class="r c-speed" data-label="Speed t/s" title="' + esc(speedTip) + '">' + speedCell + '</td>' +
+        '<td class="r c-tool" data-label="Tool"><div class="v">' + (s.toolDurationMs ? fmtDur(s.toolDurationMs) : '--') + '</div>' +
           (s.apiDurationMs ? '<div class="s">api ' + fmtDur(s.apiDurationMs) + '</div>' : '') + '</td>' +
-        '<td class="r col-cost">' + costCell(s) + '</td>' +
+        '<td class="r col-cost c-cost">' + costCell(s) + '</td>' +
       '</tr>';
     }
 
@@ -1226,7 +1347,9 @@ function renderPanelHtml() {
       $('detailChart').innerHTML = renderTurnChart(turns, d);
       if (turns.length === 0) {
         $('detailTurnsBody').innerHTML = '<tr><td colspan="10" class="empty">' +
-          (d.hasTranscript === false ? 'No transcript.jsonl on disk for this historical session.' : 'No turn token data recorded.') +
+          (String(d.conversationId || '').startsWith('pid-')
+            ? 'No conversation started in this window yet.'
+            : (d.hasTranscript === false ? 'No transcript.jsonl on disk for this historical session.' : 'No turn token data recorded.')) +
           '</td></tr>';
         return;
       }
@@ -1352,9 +1475,21 @@ function renderPanelHtml() {
       try {
         await navigator.clipboard.writeText(text);
         return true;
-      } catch {
-        return false;
-      }
+      } catch {}
+      // Phones open the panel over plain http on the LAN, where the Clipboard API is unavailable.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch {}
+      ta.remove();
+      return ok;
     }
 
     // ---------- Events ----------
@@ -1442,6 +1577,19 @@ function renderPanelHtml() {
     });
 
     $('btnSyncModal').addEventListener('click', openSyncModal);
+    $('btnPhone').addEventListener('click', () => {
+      $('lanLinks').innerHTML = state.lanUrls.map((u, i) =>
+        '<div class="lan-link"><code>' + esc(u) + '</code><button class="btn sm" data-lan="' + i + '">Copy</button></div>'
+      ).join('');
+      $('lanModal').classList.add('open');
+    });
+    $('lanLinks').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-lan]');
+      if (!btn || !(await copyText(state.lanUrls[Number(btn.dataset.lan)]))) return;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+    });
+    $('btnLanClose').addEventListener('click', () => $('lanModal').classList.remove('open'));
     $('btnDriftSync').addEventListener('click', openSyncModal);
     $('btnSyncCancel').addEventListener('click', () => $('syncModal').classList.remove('open'));
     $('btnSyncConfirm').addEventListener('click', async () => {
@@ -1472,11 +1620,12 @@ function renderPanelHtml() {
     document.addEventListener('keydown', (e) => {
       if (e.target.closest?.('input, select, textarea')) return;
       if (e.key === 'Escape') {
-        if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
+        if ($('lanModal').classList.contains('open')) $('lanModal').classList.remove('open');
+        else if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
         else if (state.selectedId) closeDetail();
         return;
       }
-      if (!state.selectedId || $('syncModal').classList.contains('open')) return;
+      if (!state.selectedId || $('syncModal').classList.contains('open') || $('lanModal').classList.contains('open')) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         moveSelection(e.key === 'ArrowDown' ? 1 : -1);

@@ -2,7 +2,7 @@
 name: check
 description: >-
   Launch and open the agy-check multi-session cache hit rate, remaining quota,
-  and account-sync WebUI panel directly from agy CLI (/check [panel|ls|session|sync|refresh|stop]).
+  and account-sync WebUI panel directly from agy CLI (/check [panel|lan|ls|session|sync|refresh|stop]).
 ---
 
 # /check — Multi-Session Cache Hit Rate & Quota Panel
@@ -12,6 +12,7 @@ When invoked via `/check` in Antigravity CLI, the `agy-check-slash-command` `Pre
 If hooks are disabled and this skill runs via the agent instead, execute the matching local command and return its concise English summary without modifying repository files:
 
 - `/check` or `/check panel`: `agy-check panel --daemon --open`
+- `/check lan [--new-token] [--networks <cidr,...>|none]`: `agy-check panel --daemon --lan [--new-token] [--networks ...]` (prints the phone link; Wi-Fi/Ethernet plus saved networks only)
 - `/check stop`: `agy-check panel stop`
 - `/check ls [range]`: `agy-check ls --range <range>` (default `24h`)
 - `/check session [id]`: `agy-check session <id>` (defaults to the current conversation ID)

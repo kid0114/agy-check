@@ -2,7 +2,7 @@
 
 const { spawn } = require('child_process');
 const { buildPanelOverview, getSessionDetail, formatGapShort } = require('./panel-data.js');
-const { createPanelServer, ensurePanelRunning, stopPanelDaemon, DEFAULT_PORT } = require('./panel-server.js');
+const { createPanelServer, ensurePanelRunning, stopPanelDaemon, setLanNetworks, DEFAULT_PORT } = require('./panel-server.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { previewAccountSync, executeAccountSync } = require('./account-sync.js');
 const { ANSI_COLORS, formatTokens } = require('./renderer/format.js');
@@ -244,6 +244,8 @@ function getHelpText() {
     '',
     'Commands:',
     `  panel [--port ${DEFAULT_PORT}] [--daemon] [--open]  Start the local WebUI dashboard (127.0.0.1)`,
+    '     [--lan] [--new-token]                      Also serve phones on Wi-Fi/Ethernet via a token link',
+    '     [--networks <cidr,...>|none]               Also serve these extra networks (saved), e.g. a VPN overlay',
     '  panel stop                                    Stop the background WebUI panel daemon',
     '  ls [--range 24h] [--sort recent]              Print a static multi-session summary table',
     '     [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]',
@@ -297,8 +299,26 @@ async function runPanelCli(argv = process.argv.slice(2)) {
       return 1;
     }
 
+    const lan = Boolean(flags.lan);
+    const rotateToken = lan && Boolean(flags['new-token']);
+    let networksChanged = false;
+    if (lan && typeof flags.networks === 'string') {
+      try {
+        setLanNetworks(null, flags.networks === 'none' ? [] : flags.networks.split(','));
+        networksChanged = true;
+      } catch (err) {
+        process.stderr.write(`${err.message}\n`);
+        return 1;
+      }
+    }
+    const printLanUrls = (urls) => {
+      if (urls.length === 0) return;
+      process.stdout.write('Phone link (anyone on these networks with it can view):\n');
+      for (const u of urls) process.stdout.write(`  ${u}\n`);
+    };
+
     if (flags.daemon) {
-      const res = await ensurePanelRunning({ port });
+      const res = await ensurePanelRunning({ port, lan, rotateToken, restart: networksChanged });
       if (!res.ok) {
         process.stderr.write(`Failed to start panel daemon: ${res.error || 'unknown error'}\n`);
         return 1;
@@ -308,13 +328,15 @@ async function runPanelCli(argv = process.argv.slice(2)) {
           ? `agy-check panel already running at ${res.url}\n`
           : `agy-check panel started in background at ${res.url} (PID ${res.pid})\n`
       );
+      printLanUrls(res.lanUrls || []);
       if (flags.open) openBrowserUrl(res.url);
       return 0;
     }
 
-    const panel = createPanelServer({ port });
+    const panel = createPanelServer({ port, lan, rotateToken });
     const info = await panel.listen();
     process.stdout.write(`agy-check panel listening at ${info.url}\n`);
+    printLanUrls(panel.lanUrls());
     process.stdout.write('Press Ctrl+C to stop.\n');
     if (flags.open) {
       openBrowserUrl(info.url);

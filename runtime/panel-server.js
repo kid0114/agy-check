@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -12,13 +13,99 @@ const { inspectLiveAuth, previewAccountSync, executeAccountSync } = require('./a
 const { renderPanelHtml } = require('./panel-ui.js');
 
 const DEFAULT_HOST = '127.0.0.1';
+const LAN_HOST = '0.0.0.0';
 const DEFAULT_PORT = 18721;
 const DEBOUNCE_MS = 500;
 const AUTH_POLL_INTERVAL_MS = 4000;
+const TOKEN_COOKIE = 'agy_check_token';
+const TOKEN_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'; // 32 symbols, no l/o/0/1
 
 function getPanelPidPath(rootDir = null) {
   const baseDir = rootDir || resolveAntigravityPath('');
   return path.join(baseDir, 'agy-hud-panel.pid');
+}
+
+function getPanelLanSettingsPath(rootDir = null) {
+  return path.join(rootDir || resolveAntigravityPath(''), 'agy-hud-panel-lan.json');
+}
+
+function parseIpv4(address) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(address || '').replace(/^::ffff:/, ''));
+  if (!m) return null;
+  const octets = m.slice(1).map(Number);
+  if (octets.some(o => o > 255)) return null;
+  return ((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+}
+
+function parseCidr(cidr) {
+  const [ip, bitsRaw] = String(cidr || '').trim().split('/');
+  const base = parseIpv4(ip);
+  const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
+  if (base === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return { base: (base & mask) >>> 0, mask };
+}
+
+function readLanSettings(rootDir = null) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(getPanelLanSettingsPath(rootDir), 'utf8'));
+    return {
+      token: typeof raw.token === 'string' && /^[a-z2-9]{12}$/.test(raw.token) ? raw.token : null,
+      networks: Array.isArray(raw.networks) ? raw.networks.filter(n => parseCidr(n)) : [],
+    };
+  } catch {
+    return { token: null, networks: [] };
+  }
+}
+
+function writeLanSettings(rootDir, settings) {
+  const settingsPath = getPanelLanSettingsPath(rootDir);
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings), { mode: 0o600 });
+  fs.chmodSync(settingsPath, 0o600);
+}
+
+// LAN access token: 12 symbols (60 bits), short enough to type on a phone. Stored 0600 so
+// phone bookmarks survive restarts; `rotate` issues a new one and invalidates old links.
+function readOrCreatePanelToken(rootDir = null, options = {}) {
+  const settings = readLanSettings(rootDir);
+  if (!options.rotate && settings.token) return settings.token;
+  const token = Array.from(crypto.randomBytes(12), b => TOKEN_ALPHABET[b & 31]).join('');
+  writeLanSettings(rootDir, { ...settings, token });
+  return token;
+}
+
+/**
+ * Saves extra networks (IPv4 CIDRs, e.g. a VPN overlay) that phones may use besides Wi-Fi/Ethernet.
+ * Returns the saved list, or throws on an invalid entry. An empty list keeps Wi-Fi/Ethernet only.
+ */
+function setLanNetworks(rootDir, networks) {
+  const list = networks.map(n => String(n).trim()).filter(Boolean);
+  const invalid = list.find(n => !parseCidr(n));
+  if (invalid) throw new Error(`Invalid network "${invalid}" (expected IPv4 CIDR such as 10.0.0.0/24)`);
+  writeLanSettings(rootDir, { ...readLanSettings(rootDir), networks: list });
+  return list;
+}
+
+// Addresses served to other devices: physical Wi-Fi/Ethernet (en* on macOS, eth/wlan on Linux)
+// plus addresses inside the saved networks. VM bridges and other tunnels are neither listed nor answered.
+function getLanAddresses(networks = [], interfaces = os.networkInterfaces()) {
+  const nets = networks.map(parseCidr).filter(Boolean);
+  const entries = [];
+  for (const [name, list] of Object.entries(interfaces)) {
+    for (const ni of list || []) {
+      if (!(ni.family === 'IPv4' || ni.family === 4) || ni.internal) continue;
+      const physical = /^(en\d|eth|wlan|wl)/.test(name);
+      const ip = parseIpv4(ni.address);
+      const listed = ip !== null && nets.some(n => ((ip & n.mask) >>> 0) === n.base);
+      if (physical || listed) entries.push({ address: ni.address, rank: physical ? 0 : 1 });
+    }
+  }
+  return entries.sort((a, b) => a.rank - b.rank).map(e => e.address);
+}
+
+function getLanUrls(port, token, networks = []) {
+  return getLanAddresses(networks).map(a => `http://${a}:${port}/?t=${token}`);
 }
 
 function readPanelPidRecord(rootDir = null) {
@@ -82,16 +169,28 @@ async function ensurePanelRunning(options = {}) {
   const rootDir = options.rootDir || resolveAntigravityPath('');
   const url = `http://${DEFAULT_HOST}:${port}`;
   const cliScriptPath = options.cliScriptPath || path.join(__dirname, 'bin', 'agy-check.js');
+  const wantLan = options.lan === true;
+  const withLanUrls = (lan) => (lan ? getLanUrls(port, readOrCreatePanelToken(rootDir), readLanSettings(rootDir).networks) : []);
 
   const initial = await checkPanelHealth(port, 400);
-  if (initial.healthy) {
+  // A running local-only panel, a new token, or changed networks all need a LAN restart.
+  const needsRestart = initial.healthy && wantLan && (!initial.data?.lan || options.rotateToken === true || options.restart === true);
+  if (initial.healthy && !needsRestart) {
     const rec = readPanelPidRecord(rootDir);
-    return { ok: true, alreadyRunning: true, pid: rec?.pid || null, port, url };
+    const lan = Boolean(initial.data?.lan);
+    return { ok: true, alreadyRunning: true, pid: rec?.pid || null, port, url, lan, lanUrls: withLanUrls(lan) };
   }
+  if (needsRestart) {
+    await stopPanelDaemon({ rootDir });
+  }
+
+  const cliArgs = [cliScriptPath, 'panel', '--port', String(port)];
+  if (wantLan) cliArgs.push('--lan');
+  if (wantLan && options.rotateToken === true) cliArgs.push('--new-token');
 
   let child;
   try {
-    child = spawn(process.execPath, [cliScriptPath, 'panel', '--port', String(port)], {
+    child = spawn(process.execPath, cliArgs, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -99,7 +198,7 @@ async function ensurePanelRunning(options = {}) {
     });
     child.unref();
   } catch (err) {
-    return { ok: false, alreadyRunning: false, pid: null, port, url, error: err.message };
+    return { ok: false, alreadyRunning: false, pid: null, port, url, lan: false, lanUrls: [], error: err.message };
   }
 
   const deadline = Date.now() + (options.waitMs || 3000);
@@ -107,11 +206,12 @@ async function ensurePanelRunning(options = {}) {
     await new Promise(r => setTimeout(r, 70));
     const probe = await checkPanelHealth(port, 300);
     if (probe.healthy) {
-      return { ok: true, alreadyRunning: false, pid: child.pid || null, port, url };
+      const lan = Boolean(probe.data?.lan);
+      return { ok: true, alreadyRunning: false, pid: child.pid || null, port, url, lan, lanUrls: withLanUrls(lan) };
     }
   }
 
-  return { ok: false, alreadyRunning: false, pid: child.pid || null, port, url, error: 'Timed out waiting for panel server to become healthy' };
+  return { ok: false, alreadyRunning: false, pid: child.pid || null, port, url, lan: false, lanUrls: [], error: 'Timed out waiting for panel server to become healthy' };
 }
 
 async function stopPanelDaemon(options = {}) {
@@ -151,8 +251,18 @@ function isLoopbackHost(headerVal) {
   );
 }
 
+function isLoopbackAddress(addr) {
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
+// "Local" means the request really comes from this machine and names a loopback host
+// (the Host check also blocks DNS-rebinding pages).
+function isLocalClient(req) {
+  return isLoopbackAddress(req.socket?.remoteAddress) && isLoopbackHost(req.headers.host);
+}
+
 function isSameOriginLocalRequest(req) {
-  if (!isLoopbackHost(req.headers.host)) return false;
+  if (!isLocalClient(req)) return false;
   const origin = req.headers.origin;
   if (origin) {
     try {
@@ -165,6 +275,38 @@ function isSameOriginLocalRequest(req) {
     }
   }
   return true;
+}
+
+// Remote (LAN) writes must come from the panel page itself: browsers always send Origin on POST.
+function isSameOriginRemoteRequest(req) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).host === String(req.headers.host || '').toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function readCookie(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) {
+      try {
+        return decodeURIComponent(rest.join('='));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function tokensMatch(candidate, token) {
+  if (!candidate || !token) return false;
+  const a = Buffer.from(String(candidate));
+  const b = Buffer.from(token);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function readJsonBody(req, maxBytes = 64 * 1024) {
@@ -234,8 +376,16 @@ function computeOverviewDigest(overview) {
 
 function createPanelServer(options = {}) {
   const rootDir = options.rootDir || resolveAntigravityPath('');
-  const host = DEFAULT_HOST;
+  const lan = options.lan === true;
+  const host = lan ? LAN_HOST : DEFAULT_HOST;
   const port = Number.isInteger(options.port) ? options.port : DEFAULT_PORT;
+  // Requests from other devices are only served in LAN mode, and only with this token.
+  const lanToken = lan ? (options.accessToken || readOrCreatePanelToken(rootDir, { rotate: options.rotateToken === true })) : null;
+  const lanNetworks = lan ? readLanSettings(rootDir).networks : [];
+  const listeningPort = () => {
+    const addr = server.address();
+    return typeof addr === 'object' && addr ? addr.port : port;
+  };
   const transcriptCache = new Map();
   const summaryCache = {};
   const sseClients = new Set();
@@ -348,21 +498,41 @@ function createPanelServer(options = {}) {
   const html = renderPanelHtml();
 
   const server = http.createServer(async (req, res) => {
-    const reqUrl = new URL(req.url || '/', `http://${host}:${port}`);
+    const reqUrl = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
     const pathname = reqUrl.pathname;
+    const local = isLocalClient(req);
+    const queryTokenValid = !local && tokensMatch(reqUrl.searchParams.get('t'), lanToken);
+
+    // Other devices are answered only on Wi-Fi/Ethernet or a saved network, never on VM bridges or other tunnels.
+    const localAddress = String(req.socket?.localAddress || '').replace(/^::ffff:/, '');
+    if (!local && !isLoopbackAddress(localAddress) && !getLanAddresses(lanNetworks).includes(localAddress)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end('agy-check: not served on this network.\n');
+      return;
+    }
+
+    if (!local && !(queryTokenValid || tokensMatch(readCookie(req, TOKEN_COOKIE), lanToken))) {
+      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end('agy-check: open the phone link shown by `/check lan` (it ends with ?t=...).\n');
+      return;
+    }
 
     try {
       if (req.method === 'GET' && pathname === '/') {
-        res.writeHead(200, {
+        const headers = {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
-        });
+        };
+        if (queryTokenValid) {
+          headers['Set-Cookie'] = `${TOKEN_COOKIE}=${lanToken}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`;
+        }
+        res.writeHead(200, headers);
         res.end(html);
         return;
       }
 
       if (req.method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, rootDir, clients: sseClients.size });
+        sendJson(res, 200, { ok: true, rootDir, clients: sseClients.size, lan });
         return;
       }
 
@@ -380,6 +550,14 @@ function createPanelServer(options = {}) {
           account,
           includeEmpty,
         });
+        overview.viewer = { local };
+        if (local && lanToken) {
+          overview.lan = { urls: getLanUrls(listeningPort(), lanToken, lanNetworks) };
+        }
+        if (!local) {
+          // Sync stops agy windows on this Mac, so it is never offered to other devices.
+          overview.auth = { ...overview.auth, syncBridgeAvailable: false };
+        }
         sendJson(res, 200, overview);
         return;
       }
@@ -414,7 +592,7 @@ function createPanelServer(options = {}) {
       }
 
       if (req.method === 'POST' && pathname === '/api/quota/refresh') {
-        if (!isSameOriginLocalRequest(req)) {
+        if (!(local ? isSameOriginLocalRequest(req) : isSameOriginRemoteRequest(req))) {
           sendJson(res, 403, { error: 'Forbidden origin' });
           return;
         }
@@ -422,6 +600,11 @@ function createPanelServer(options = {}) {
         const result = await refresher();
         scheduleBroadcast(true);
         sendJson(res, 200, result);
+        return;
+      }
+
+      if ((pathname === '/api/sync/preview' || pathname === '/api/sync/execute') && !local) {
+        sendJson(res, 403, { error: 'Account sync is only available on the machine running agy' });
         return;
       }
 
@@ -470,16 +653,17 @@ function createPanelServer(options = {}) {
     server,
     host,
     port,
+    lan,
+    lanUrls: () => (lanToken ? getLanUrls(listeningPort(), lanToken, lanNetworks) : []),
     listen: () => new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {
         server.removeListener('error', reject);
-        const addr = server.address();
-        const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+        const actualPort = listeningPort();
         if (port > 0) {
-          writePanelPidRecord({ pid: process.pid, port: actualPort, startedAt: Date.now() }, rootDir);
+          writePanelPidRecord({ pid: process.pid, port: actualPort, lan, startedAt: Date.now() }, rootDir);
         }
-        resolve({ host, port: actualPort, url: `http://${host}:${actualPort}` });
+        resolve({ host, port: actualPort, url: `http://${DEFAULT_HOST}:${actualPort}`, lan });
       });
     }),
     close: () => new Promise(resolve => server.close(() => resolve())),
@@ -490,6 +674,12 @@ module.exports = {
   DEFAULT_HOST,
   DEFAULT_PORT,
   getPanelPidPath,
+  getPanelLanSettingsPath,
+  readLanSettings,
+  readOrCreatePanelToken,
+  setLanNetworks,
+  getLanAddresses,
+  getLanUrls,
   readPanelPidRecord,
   checkPanelHealth,
   ensurePanelRunning,
