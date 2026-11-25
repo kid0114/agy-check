@@ -1,7 +1,7 @@
 {
   "name": "agy-check",
   "version": "0.4.0",
-  "description": "Enhanced real-time statusline HUD for Antigravity CLI with dual output speed, hook-timed tool duration, accurate turn & session cache hit rate, and multi-account quota tracking",
+  "description": "Multi-device local dashboard, session manager & HUD for Antigravity CLI (agy) — live desktop, phone PWA, LAN/TUN & remote server sync, quota, cache & cost.",
   "main": "runtime/bin/agy-hud.js",
   "files": [
     "runtime",
@@ -34,13 +34,18 @@
   },
   "keywords": [
     "antigravity",
+    "antigravity-cli",
     "agy",
-    "cli",
-    "hud",
+    "agy-hud",
     "statusline",
-    "cache-hit-rate",
-    "telemetry",
-    "terminal"
+    "dashboard",
+    "session-manager",
+    "ai-coding",
+    "prompt-cache",
+    "quota",
+    "pwa",
+    "self-hosted",
+    "cli"
   ],
   "author": "kid0114 (based on agy-hud by icebear0828)",
   "license": "MIT"
