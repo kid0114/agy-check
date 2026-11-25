@@ -251,6 +251,7 @@ function getHelpText() {
     '  ls [--range 24h] [--sort recent]              Print a static multi-session summary table',
     '     [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]',
     '  session <id-prefix> [--json]       Inspect per-turn cache hit rate & miss diagnosis for one session',
+    '  account [list|save|switch|sign-in|remove]  Manage saved agy credentials in OS keyring (local only)',
     '  sync [--apply]                     Preview (default --dry-run) or execute agy-sync-keychain.sh',
     '  config                             Launch the HUD configuration wizard',
     '  update                             Self-update agy-check runtime',
@@ -264,6 +265,17 @@ async function runPanelCli(argv = process.argv.slice(2)) {
   if (flags.help || command === 'help') {
     process.stdout.write(getHelpText());
     return 0;
+  }
+
+  // Silently keep the panel's live agy API endpoint pool warm whenever any CLI
+  // command runs inside an agent shell carrying ANTIGRAVITY_LS_ADDRESS + CSRF.
+  const isExplicitHandoffOrStop = (command === 'panel' || command === 'web' || command === 'serve')
+    && (args[0] === 'handoff' || args[0] === 'stop');
+  if (!isExplicitHandoffOrStop) {
+    try {
+      const { maybeAutoHandoffEndpoint } = require('./conversation-ops.js');
+      maybeAutoHandoffEndpoint();
+    } catch {}
   }
 
   if (command === 'config') {
@@ -411,6 +423,130 @@ async function runPanelCli(argv = process.argv.slice(2)) {
       process.stdout.write(formatSessionDetailText(detail));
     }
     return 0;
+  }
+
+  if (command === 'account' || command === 'accounts') {
+    const {
+      getVaultStatus,
+      saveCurrentAccount,
+      switchSavedAccount,
+      removeSavedAccount,
+      prepareSignInNewAccount,
+    } = require('./account-vault.js');
+    const sub = args[0] || 'list';
+
+    if (sub === 'list' || sub === 'ls' || sub === 'status') {
+      const st = getVaultStatus();
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(st, null, 2)}\n`);
+        return 0;
+      }
+      if (!st.supported) {
+        process.stderr.write(`${st.reason || 'Credential vault is not supported on this platform.'}\n`);
+        return 1;
+      }
+      process.stdout.write(`Active agy account: ${st.activeEmail || '(not signed in)'}${st.activeEmail ? (st.activeSaved ? ' [saved]' : ' [unsaved]') : ''}\n`);
+      if (st.accounts.length === 0) {
+        process.stdout.write('No saved accounts yet. Run `agy-check account save` to save the current login.\n');
+        return 0;
+      }
+      for (const a of st.accounts) {
+        const tag = a.isActive ? 'active' : (a.expired ? 'refresh needed' : 'ready');
+        const label = a.label ? ` (${a.label})` : '';
+        process.stdout.write(`  ${a.isActive ? '*' : ' '} ${a.email}${label}  [${tag}]\n`);
+      }
+      return 0;
+    }
+
+    if (sub === 'save') {
+      const res = await saveCurrentAccount({
+        label: typeof flags.label === 'string' ? flags.label : null,
+        force: Boolean(flags.force),
+      });
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+        return res.ok ? 0 : 1;
+      }
+      if (!res.ok) {
+        process.stderr.write(`Failed to save account: ${res.error}\n`);
+        return 1;
+      }
+      process.stdout.write(
+        res.keptNewer
+          ? `Kept newer saved credential for ${res.email} (current keyring copy was older; pass --force to overwrite).\n`
+          : `Saved ${res.email} to OS keyring vault.\n`
+      );
+      return 0;
+    }
+
+    if (sub === 'switch' || sub === 'use') {
+      const target = args[1];
+      if (!target) {
+        process.stderr.write('Usage: agy-check account switch <email>\n');
+        return 1;
+      }
+      const res = await switchSavedAccount(target);
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+        return res.ok ? 0 : 1;
+      }
+      if (!res.ok) {
+        process.stderr.write(`Switch failed: ${res.error}\n`);
+        return 1;
+      }
+      if (res.alreadyActive) {
+        process.stdout.write(`${res.email} is already active.\n`);
+        return 0;
+      }
+      const note = res.refreshNeeded
+        ? ' (access token expired; agy will refresh it automatically on next run)'
+        : (res.quotaRefreshed ? ' (live quota refreshed)' : '');
+      process.stdout.write(`Switched active agy login to ${res.email}${note}.\n`);
+      return 0;
+    }
+
+    if (sub === 'remove' || sub === 'rm' || sub === 'delete') {
+      const target = args[1];
+      if (!target) {
+        process.stderr.write('Usage: agy-check account remove <email>\n');
+        return 1;
+      }
+      const res = await removeSavedAccount(target);
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+        return res.ok ? 0 : 1;
+      }
+      if (!res.ok) {
+        process.stderr.write(`Remove failed: ${res.error}\n`);
+        return 1;
+      }
+      process.stdout.write(`Removed saved vault copy for ${res.email} (active agy login was not modified).\n`);
+      return 0;
+    }
+
+    if (sub === 'sign-in' || sub === 'login' || sub === 'add') {
+      const res = await prepareSignInNewAccount({ launchTerminal: !flags['no-open'] });
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+        return res.ok ? 0 : 1;
+      }
+      if (!res.ok) {
+        process.stderr.write(`Sign-in prep failed: ${res.error}\n`);
+        return 1;
+      }
+      if (res.backedUpEmail) {
+        process.stdout.write(`Saved ${res.backedUpEmail} to OS keyring vault and cleared active login slot.\n`);
+      }
+      process.stdout.write(
+        res.launchedTerminal
+          ? 'Opened agy in a terminal to sign in. Run `agy-check account save` (or click Save in the panel) afterward.\n'
+          : 'Run `agy` in a terminal to complete Google sign-in, then run `agy-check account save`.\n'
+      );
+      return 0;
+    }
+
+    process.stderr.write('Usage: agy-check account [list|save|switch <email>|sign-in|remove <email>] [--json]\n');
+    return 1;
   }
 
   if (command === 'sync') {

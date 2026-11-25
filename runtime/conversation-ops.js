@@ -193,6 +193,36 @@ function handoffEndpoint(options = {}) {
 }
 
 /**
+ * Silently records the calling agy window's API endpoint when invoked inside
+ * an agent-executed shell carrying ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN.
+ * Fast no-op when env vars are absent or the exact live endpoint is already at
+ * the head of the pool (avoids redundant lsof calls and fs.watch churn).
+ */
+function maybeAutoHandoffEndpoint(options = {}) {
+  const { env = process.env, rootDir = null } = options;
+  const ep = resolveLsEndpoint(env);
+  if (!ep) return { ok: false, skipped: 'no_env' };
+  const deps = resolveDeps(options.deps);
+  try {
+    const pool = readEndpointPool(rootDir);
+    const head = pool[0];
+    if (
+      head &&
+      head.host === ep.host &&
+      head.port === ep.port &&
+      head.csrfToken === ep.csrfToken &&
+      head.agyPid &&
+      deps.isPidAlive(head.agyPid)
+    ) {
+      return { ok: true, unchanged: true, agyPid: head.agyPid, endpointCount: pool.length };
+    }
+    return handoffEndpoint(options);
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : 'Auto handoff failed' };
+  }
+}
+
+/**
  * Returns usable loopback endpoints: the daemon's own inherited environment
  * (if any) plus handed-off ones, each verified to still be served by the same
  * live agy process (protects against sending a token to a reused port).
@@ -495,6 +525,7 @@ module.exports = {
   readEndpointPool,
   writeEndpointPool,
   handoffEndpoint,
+  maybeAutoHandoffEndpoint,
   getLiveEndpoints,
   describeOps,
   setConversationsArchived,

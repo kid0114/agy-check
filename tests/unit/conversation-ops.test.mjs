@@ -154,6 +154,31 @@ describe('conversation ops', () => {
       listeners.set(50003, 333);
       assert.equal(ops.getLiveEndpoints({ rootDir: root, env: envOnly, deps: { ...deps, processCommand: () => '/usr/bin/python3 x' } }).some(e => e.port === 50003), false);
       assert.equal(ops.getLiveEndpoints({ rootDir: root, env: envOnly, deps }).find(e => e.port === 50003)?.agyPid, 333);
+
+      // Passive auto-handoff skips when env is absent, stores on first sight,
+      // avoids listenerPid/write when unchanged, and updates on port/CSRF rotation.
+      assert.deepEqual(ops.maybeAutoHandoffEndpoint({ rootDir: root, env: {} }), { ok: false, skipped: 'no_env' });
+      let listenerLookups = 0;
+      const trackDeps = {
+        ...deps,
+        listenerPid: (p) => { listenerLookups += 1; return listeners.get(p) || null; },
+      };
+      const auto1 = ops.maybeAutoHandoffEndpoint({ rootDir: root, env: envOnly, deps: trackDeps });
+      assert.equal(auto1.ok, true);
+      assert.equal(auto1.agyPid, 333);
+      assert.equal(listenerLookups, 1);
+
+      const auto2 = ops.maybeAutoHandoffEndpoint({ rootDir: root, env: envOnly, deps: trackDeps });
+      assert.equal(auto2.ok, true);
+      assert.equal(auto2.unchanged, true);
+      assert.equal(listenerLookups, 1, 'unchanged head entry should skip lsof lookup');
+
+      const rotatedEnv = { ANTIGRAVITY_LS_ADDRESS: 'localhost:50004', ANTIGRAVITY_CSRF_TOKEN: 'tok-4' };
+      listeners.set(50004, 444);
+      const auto3 = ops.maybeAutoHandoffEndpoint({ rootDir: root, env: rotatedEnv, deps: trackDeps });
+      assert.equal(auto3.ok, true);
+      assert.equal(auto3.agyPid, 444);
+      assert.equal(ops.readEndpointPool(root)[0].port, 50004);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

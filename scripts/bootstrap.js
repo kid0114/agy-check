@@ -12,6 +12,7 @@ const DEFAULT_SOURCE_BASE = 'https://raw.githubusercontent.com/kid0114/agy-check
 const RUNTIME_FILES = [
   'package.json',
   'runtime/account-sync.js',
+  'runtime/account-vault.js',
   'runtime/agy-hud.config.json',
   'runtime/bin/agy-check.js',
   'runtime/bin/agy-hud.js',

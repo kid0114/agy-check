@@ -9,15 +9,20 @@ const { spawn } = require('child_process');
 const { resolveAntigravityPath } = require('./paths.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { buildPanelOverview, getSessionDetail, renameConversationTitle, collectAllSessions } = require('./panel-data.js');
-const { inspectLiveAuth, previewAccountSync, executeAccountSync } = require('./account-sync.js');
+const { inspectLiveAuth, detectRunningAgySessions, previewAccountSync, executeAccountSync } = require('./account-sync.js');
+const { getVaultStatus, saveCurrentAccount, switchSavedAccount, removeSavedAccount, prepareSignInNewAccount } = require('./account-vault.js');
 const { getLiveEndpoints, describeOps, setConversationsArchived, deleteConversations } = require('./conversation-ops.js');
 const { renderPanelHtml, renderPairingHtml } = require('./panel-ui.js');
 
 const DEFAULT_HOST = '127.0.0.1';
 const LAN_HOST = '0.0.0.0';
 const DEFAULT_PORT = 18721;
-const DEBOUNCE_MS = 500;
-const AUTH_POLL_INTERVAL_MS = 4000;
+const DEBOUNCE_MS = 900;
+const MIN_BROADCAST_INTERVAL_MS = 1800;
+const AUTH_POLL_INTERVAL_MS = 6000;
+const RUNNING_CACHE_TTL_MS = 3000;
+const VAULT_CACHE_TTL_MS = 2500;
+const OVERVIEW_CACHE_TTL_MS = 2000;
 const SSE_HEARTBEAT_MS = 20000;
 const QUOTA_AUTO_REFRESH_MS = 3 * 60 * 1000;
 const SESSION_COOKIE = 'agy_check_session';
@@ -303,6 +308,24 @@ function isLocalClient(req) {
   return isLoopbackAddress(req.socket?.remoteAddress) && isLoopbackHost(req.headers.host);
 }
 
+function hasForwardedProxyHeaders(req) {
+  const h = req && req.headers ? req.headers : {};
+  return Boolean(
+    h['x-forwarded-for'] ||
+    h['x-forwarded-host'] ||
+    h['x-forwarded-proto'] ||
+    h['forwarded'] ||
+    h['cf-connecting-ip'] ||
+    h['x-real-ip']
+  );
+}
+
+// Strict loopback-only check for sensitive host capabilities (account vault & credential switching):
+// excludes proxied/tunneled loopback traffic and paired-phone cookies.
+function isTrustedLocalClient(req) {
+  return isLocalClient(req) && !hasForwardedProxyHeaders(req) && !readCookie(req, SESSION_COOKIE);
+}
+
 function isSameOriginLocalRequest(req) {
   if (!isLocalClient(req)) return false;
   const origin = req.headers.origin;
@@ -310,6 +333,9 @@ function isSameOriginLocalRequest(req) {
     try {
       const parsed = new URL(origin);
       if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost' && parsed.hostname !== '::1') {
+        return false;
+      }
+      if (req.headers.host && parsed.host.toLowerCase() !== String(req.headers.host).trim().toLowerCase()) {
         return false;
       }
     } catch {
@@ -415,6 +441,13 @@ function computeOverviewDigest(overview) {
       arch: Boolean(s.archived),
     })),
     ops: overview.ops ? { del: Boolean(overview.ops.deleteAvailable), n: overview.ops.endpointCount || 0 } : null,
+    vault: overview.vault
+      ? {
+          activeEmail: overview.vault.activeEmail || null,
+          activeSaved: Boolean(overview.vault.activeSaved),
+          accounts: (overview.vault.accounts || []).map(a => `${a.email}:${a.status}:${a.updatedAt || 0}:${a.lastSwitchedAt || 0}`),
+        }
+      : null,
   };
   return crypto.createHash('sha1').update(JSON.stringify(stripped)).digest('hex');
 }
@@ -477,6 +510,8 @@ function createPanelServer(options = {}) {
   const sseClients = new Set();
   const watchers = [];
   let debounceTimer = null;
+  let throttleTimer = null;
+  let lastBroadcastAt = 0;
   let pollTimer = null;
   let heartbeatTimer = null;
   let lastDigest = null;
@@ -494,6 +529,50 @@ function createPanelServer(options = {}) {
     : QUOTA_AUTO_REFRESH_MS;
   const quotaAutoEnabled = quotaAutoRefreshMs > 0 && (!options.dataOptions?.quotaFetcher || Boolean(options.quotaRefresher));
   const runQuotaRefresh = () => (options.quotaRefresher ? options.quotaRefresher() : refreshQuotaNow({ roots: [rootDir] }));
+
+  // Short-TTL caches to eliminate redundant synchronous `lsof` / `ps` / `security` subprocess
+  // stalls across watcher broadcasts and immediate browser `/api/overview` refetches.
+  let runningCache = { at: 0, list: null };
+  let vaultStatusCache = { at: 0, status: null };
+  let overviewResponseCache = new Map();
+  const invalidateLiveCaches = ({ running = false, vault = false, endpoints = false } = {}) => {
+    overviewResponseCache.clear();
+    if (running) runningCache.at = 0;
+    if (vault) vaultStatusCache.at = 0;
+    if (endpoints) endpointsCache.at = 0;
+  };
+  const getCachedRunningSessions = (auth) => {
+    if (Array.isArray(options.dataOptions?.runningSessions)) {
+      return options.dataOptions.runningSessions;
+    }
+    const now = Date.now();
+    if (runningCache.list && now - runningCache.at < RUNNING_CACHE_TTL_MS) {
+      return runningCache.list;
+    }
+    const list = detectRunningAgySessions({
+      rootDir,
+      activeEmail: auth?.activeEmail || null,
+      switchedAt: auth?.switchedAt || null,
+    });
+    runningCache = { at: now, list };
+    return list;
+  };
+  const getCachedVaultStatus = (liveEmailHint = null) => {
+    if (typeof options.vaultStatusProvider === 'function') {
+      return options.vaultStatusProvider();
+    }
+    const now = Date.now();
+    if (vaultStatusCache.status && now - vaultStatusCache.at < VAULT_CACHE_TTL_MS) {
+      return vaultStatusCache.status;
+    }
+    const st = getVaultStatus({
+      rootDir,
+      liveEmailHint,
+      ...(options.vaultOptions || {}),
+    });
+    vaultStatusCache = { at: now, status: st };
+    return st;
+  };
 
   const dataOpts = {
     rootDir,
@@ -537,8 +616,12 @@ function createPanelServer(options = {}) {
       }
       lastSeenAccountKey = acctKey;
 
-      const overview = await buildPanelOverview({ ...dataOpts, range: 'all', includeArchived: true });
-      overview.ops = describeOps(liveEndpoints());
+      const runningNow = getCachedRunningSessions(auth);
+      const overview = await buildPanelOverview({ ...dataOpts, runningSessions: runningNow, range: 'all', includeArchived: true });
+      overview.ops = describeOps(liveEndpoints(5000));
+      try {
+        overview.vault = getCachedVaultStatus(overview.auth?.activeEmail || null);
+      } catch {}
 
       // Gently refresh cloud quota in the background while at least one browser is connected.
       if (sseClients.size > 0 && quotaAutoEnabled && auth.loggedIn && !auth.expired && !quotaRefreshing) {
@@ -559,6 +642,8 @@ function createPanelServer(options = {}) {
       const digest = computeOverviewDigest(overview);
       if (!forceBroadcast && digest === lastDigest) return;
       lastDigest = digest;
+      lastBroadcastAt = Date.now();
+      overviewResponseCache.clear();
 
       const payload = `event: changed\ndata: ${JSON.stringify({ digest, ts: Date.now() })}\n\n`;
       for (const client of sseClients) {
@@ -574,11 +659,30 @@ function createPanelServer(options = {}) {
   }
 
   function scheduleBroadcast(force = false) {
+    if (force) {
+      invalidateLiveCaches({ running: true, vault: true, endpoints: true });
+    }
     if (sseClients.size === 0) return;
+    if (force) {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+      maybeCheckAuthSwitchAndBroadcast(true);
+      return;
+    }
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      maybeCheckAuthSwitchAndBroadcast(force);
+      const since = Date.now() - lastBroadcastAt;
+      if (since < MIN_BROADCAST_INTERVAL_MS) {
+        if (!throttleTimer) {
+          throttleTimer = setTimeout(() => {
+            throttleTimer = null;
+            maybeCheckAuthSwitchAndBroadcast(false);
+          }, MIN_BROADCAST_INTERVAL_MS - since);
+        }
+        return;
+      }
+      maybeCheckAuthSwitchAndBroadcast(false);
     }, DEBOUNCE_MS);
   }
 
@@ -596,8 +700,17 @@ function createPanelServer(options = {}) {
       try {
         if (!fs.existsSync(target)) continue;
         const w = fs.watch(target, { persistent: false }, (_eventType, filename) => {
-          if (filename && String(filename).includes('.tmp.')) return;
-          if (target === rootDir) endpointsCache.at = 0;
+          const fname = filename ? String(filename) : '';
+          if (fname.includes('.tmp.') || fname.endsWith('.lock') && target === rootDir) return;
+          if (fname === 'agy-hud-account-state.json' || fname === 'agy-hud-panel.pid') return;
+          overviewResponseCache.clear();
+          if (target === rootDir) {
+            endpointsCache.at = 0;
+            if (fname.includes('vault')) vaultStatusCache.at = 0;
+          }
+          if (target.endsWith('presence') || target.endsWith('conversations')) {
+            runningCache.at = 0;
+          }
           scheduleBroadcast(false);
         });
         w.on('error', () => {});
@@ -635,6 +748,10 @@ function createPanelServer(options = {}) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -652,6 +769,16 @@ function createPanelServer(options = {}) {
   const html = renderPanelHtml();
   const uiHash = crypto.createHash('sha1').update(html).digest('hex').slice(0, 12);
   const pairingHtml = renderPairingHtml();
+  // Per-server-boot capability token injected ONLY into HTML served to trusted local clients.
+  // Never sent to LAN/TUN paired devices or reverse-proxied requests.
+  const localVaultToken = crypto.randomBytes(24).toString('base64url');
+  const localHtml = html.replace('</head>', `  <meta name="agy-local-token" content="${localVaultToken}">\n</head>`);
+  const vaultOpts = options.vaultOptions || {};
+  const isAuthorizedVaultWrite = (req) => {
+    if (!isTrustedLocalClient(req) || !isSameOriginLocalRequest(req)) return false;
+    if (!req.headers.origin) return false;
+    return tokensMatch(req.headers['x-agy-local-token'], localVaultToken);
+  };
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
@@ -730,11 +857,12 @@ function createPanelServer(options = {}) {
       }
 
       if (req.method === 'GET' && pathname === '/') {
+        const trustedLocal = isTrustedLocalClient(req);
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
         });
-        res.end(html);
+        res.end(trustedLocal ? localHtml : html);
         return;
       }
 
@@ -750,8 +878,18 @@ function createPanelServer(options = {}) {
         const account = reqUrl.searchParams.get('account') || 'all';
         const includeEmpty = reqUrl.searchParams.get('empty') === '1';
         const includeArchived = reqUrl.searchParams.get('archived') === '1';
+        const trustedLocal = isTrustedLocalClient(req);
+        const cacheKey = `${range}|${query}|${sort}|${account}|${includeEmpty ? 1 : 0}|${includeArchived ? 1 : 0}|${local ? 1 : 0}|${trustedLocal ? 1 : 0}`;
+        const cached = overviewResponseCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < OVERVIEW_CACHE_TTL_MS) {
+          sendJson(res, 200, cached.payload);
+          return;
+        }
+        const liveAuth = inspectLiveAuth({ rootDir, ...(options.authOptions || {}) });
+        const runningNow = getCachedRunningSessions(liveAuth);
         const overview = await buildPanelOverview({
           ...dataOpts,
+          runningSessions: runningNow,
           range,
           query,
           sort,
@@ -765,10 +903,19 @@ function createPanelServer(options = {}) {
         if (local && lan) {
           overview.lan = { urls: getLanUrls(listeningPort(), lanNetworks), devices: activeDevices().length };
         }
+        if (trustedLocal) {
+          try {
+            overview.vault = getCachedVaultStatus(overview.auth?.activeEmail || null);
+          } catch {
+            overview.vault = { supported: false, reason: 'Vault status unavailable', accounts: [] };
+          }
+        }
         if (!local) {
           // Sync stops agy windows on this Mac, so it is never offered to other devices.
           overview.auth = { ...overview.auth, syncBridgeAvailable: false };
         }
+        if (overviewResponseCache.size > 24) overviewResponseCache.clear();
+        overviewResponseCache.set(cacheKey, { at: Date.now(), payload: overview });
         sendJson(res, 200, overview);
         return;
       }
@@ -891,6 +1038,50 @@ function createPanelServer(options = {}) {
         return;
       }
 
+      if (pathname === '/api/accounts/save' || pathname === '/api/accounts/switch' || pathname === '/api/accounts/remove' || pathname === '/api/accounts/sign-in') {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'Method not allowed' });
+          return;
+        }
+        if (!isAuthorizedVaultWrite(req)) {
+          sendJson(res, 403, { ok: false, error: 'Saved account management is only available directly on the local desktop host.' });
+          return;
+        }
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
+          return;
+        }
+        let result;
+        if (pathname === '/api/accounts/save') {
+          const saver = options.vaultSaver || ((opts) => saveCurrentAccount({ rootDir, ...vaultOpts, ...opts }));
+          result = await saver({ label: body?.label, force: body?.force === true });
+        } else if (pathname === '/api/accounts/switch') {
+          const switcher = options.vaultSwitcher || ((email, opts) => switchSavedAccount(email, {
+            rootDir,
+            quotaRefresher: options.quotaRefresher,
+            ...vaultOpts,
+            ...opts,
+          }));
+          result = await switcher(body?.email, {});
+        } else if (pathname === '/api/accounts/sign-in') {
+          const starter = options.vaultSignInStarter || ((opts) => prepareSignInNewAccount({ rootDir, ...vaultOpts, ...opts }));
+          result = await starter({ launchTerminal: body?.launchTerminal !== false });
+        } else {
+          const remover = options.vaultRemover || ((email, opts) => removeSavedAccount(email, { rootDir, ...vaultOpts, ...opts }));
+          result = await remover(body?.email, {});
+        }
+        if (result && result.ok) {
+          invalidateLiveCaches({ running: true, vault: true });
+          scheduleBroadcast(true);
+        }
+        const { status, ...payload } = result || { ok: false, status: 500, error: 'Vault operation failed' };
+        sendJson(res, status || (result?.ok ? 200 : 400), payload);
+        return;
+      }
+
       if ((pathname === '/api/sync/preview' || pathname === '/api/sync/execute') && !local) {
         sendJson(res, 403, { error: 'Account sync is only available on the machine running agy' });
         return;
@@ -975,6 +1166,7 @@ module.exports = {
   ensurePanelRunning,
   stopPanelDaemon,
   isSameOriginLocalRequest,
+  isTrustedLocalClient,
   computeOverviewDigest,
   createPanelServer,
 };

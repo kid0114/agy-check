@@ -202,6 +202,192 @@ function renderPanelHtml() {
     .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
     .conn { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
     .acct { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
+    .acct[hidden] { display: none; }
+    .acct-menu-wrap { position: relative; display: inline-flex; align-items: center; }
+    .acct-chip-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--text);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.12s, border-color 0.12s, opacity 0.15s;
+    }
+    .acct-chip-btn[hidden] { display: none; }
+    .acct-chip-btn:hover,
+    .acct-chip-btn[aria-expanded="true"] {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .acct-chip-btn.switching { opacity: 0.55; }
+    .acct-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--green); }
+    .acct-dot.warn { background: var(--amber); box-shadow: 0 0 0 2px rgba(233, 162, 59, 0.22); }
+    .acct-dot.muted { background: #5a6270; }
+    .acct-menu-label { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acct-chip-btn .tier { padding: 1px 7px; font-size: 10.5px; }
+    .acct-chev { width: 12px; height: 12px; color: var(--muted); flex: none; transition: transform 0.12s ease; }
+    .acct-chip-btn[aria-expanded="true"] .acct-chev { transform: rotate(180deg); color: var(--text-2); }
+
+    .acct-pop {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 45;
+      width: 356px;
+      max-width: calc(100vw - 24px);
+      background: #17181c;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 12px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 16px 40px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+    }
+    .acct-pop.open { opacity: 1; transform: translateY(0); }
+    .acct-pop[hidden] { display: none; }
+    .acct-pop-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 14px 9px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .acct-pop-head .sub { font-weight: 500; letter-spacing: 0; text-transform: none; color: #67707e; }
+    .acct-pop-unsaved {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 14px;
+      background: rgba(233, 162, 59, 0.09);
+      border-bottom: 1px solid rgba(233, 162, 59, 0.22);
+      font-size: 12px;
+      color: #f3c47a;
+    }
+    .acct-pop-unsaved span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acct-pop-unsaved strong { color: #ffd799; font-weight: 600; }
+    .acct-pop-list { max-height: 300px; overflow-y: auto; }
+    .acct-pop-empty { padding: 14px; font-size: 12px; color: var(--muted); }
+    .acct-pop-item { border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+    .acct-pop-item:last-child { border-bottom: 0; }
+    .acct-pop-item.is-active { box-shadow: inset 2px 0 0 var(--accent); background: rgba(124, 156, 255, 0.045); }
+    .acct-pop-row {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      padding: 10px 14px;
+    }
+    .acct-pop-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .acct-pop-email { font-size: 12.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acct-pop-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acct-pop-meta .warn-txt { color: var(--amber); }
+    .acct-pop-acts { display: inline-flex; align-items: center; gap: 5px; }
+    .acct-pop-active-lbl { font-size: 11px; font-weight: 600; color: var(--green); padding: 0 4px; }
+    .btn.acct-pop-btn {
+      min-width: 60px;
+      height: 26px;
+      min-height: 26px;
+      padding: 0 10px;
+      font-size: 11.5px;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.035);
+      border-color: rgba(255, 255, 255, 0.13);
+      color: var(--text);
+    }
+    .btn.acct-pop-btn:hover {
+      background: rgba(255, 255, 255, 0.085);
+      border-color: rgba(255, 255, 255, 0.24);
+    }
+    .acct-pop-del {
+      width: 24px;
+      height: 24px;
+      min-height: 24px;
+      padding: 0;
+      color: var(--muted);
+      opacity: 0;
+      transition: opacity 0.12s, color 0.12s, background-color 0.12s;
+    }
+    .acct-pop-row:hover .acct-pop-del,
+    .acct-pop-row:focus-within .acct-pop-del { opacity: 1; }
+    .acct-pop-del:hover { color: var(--red); background: var(--red-soft); border-color: rgba(240, 100, 106, 0.3); }
+    .acct-pop-rm-confirm { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: #f7a8ac; }
+    .acct-pop-rm-confirm .btn.xs { height: 24px; min-height: 24px; padding: 0 8px; font-size: 11px; }
+    .acct-pop-expand {
+      padding: 0 14px 11px 33px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      font-size: 11.5px;
+      color: #f3c47a;
+    }
+    .acct-pop-expand strong { color: #ffd799; }
+    .acct-pop-expand-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .acct-pop-expand-acts .btn.xs { height: 26px; min-height: 26px; padding: 0 9px; font-size: 11.5px; }
+    .acct-pop-foot {
+      padding: 8px 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .acct-pop-signin-btn {
+      width: 100%;
+      justify-content: flex-start;
+      height: 30px;
+      min-height: 30px;
+      padding: 0 8px;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+    .acct-pop-signin-btn:hover { color: var(--text); }
+    .acct-pop-signin-box {
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-2);
+      line-height: 1.45;
+    }
+    .acct-pop-signin-box strong { color: var(--text); }
+    .acct-pop-signin-acts { display: flex; align-items: center; gap: 6px; }
+    .acct-pop-signin-acts .btn.xs { height: 26px; min-height: 26px; padding: 0 10px; font-size: 11.5px; }
+    .quota-vault-foot {
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .quota-vault-foot .link-btn {
+      background: none;
+      border: 0;
+      padding: 2px 4px;
+      border-radius: 5px;
+      color: var(--text-2);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .quota-vault-foot .link-btn:hover { color: var(--accent); background: var(--accent-soft); }
+    @media (prefers-reduced-motion: reduce) {
+      .acct-pop, .acct-chev, .acct-chip-btn { transition: none; }
+    }
     .tier {
       font-size: 11px;
       font-weight: 600;
@@ -558,7 +744,7 @@ function renderPanelHtml() {
     body.bulk-open .app { padding-bottom: 120px; }
     .toast {
       position: fixed;
-      top: calc(72px + env(safe-area-inset-top));
+      bottom: calc(24px + env(safe-area-inset-bottom));
       right: 24px;
       z-index: 120;
       display: flex;
@@ -777,7 +963,7 @@ function renderPanelHtml() {
       .bulk-actions .btn { justify-content: center; padding: 0 8px; }
       .bulk-actions > .ops-wrap > .btn { flex: 1; }
       body.bulk-open .app { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
-      .toast { left: 12px; right: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); }
+      .toast { left: 12px; right: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); bottom: auto; }
     }
 
     /* ---- Depth & translucency (cross-platform progressive enhancement) ---- */
@@ -860,7 +1046,16 @@ function renderPanelHtml() {
       </div>
       <div class="top-right">
         <span id="rangeCost" class="cost-pill" title="Estimated API cost for the selected range; updates after every completed turn"><span class="k">24h</span>--</span>
-        <span class="acct"><span class="muted">Account</span><span id="acctEmail">--</span><span id="tierBadge" class="tier" hidden></span></span>
+        <div id="acctMenuWrap" class="acct-menu-wrap">
+          <button id="btnAcctMenu" class="acct-chip-btn" type="button" aria-haspopup="dialog" aria-expanded="false" hidden>
+            <span id="acctMenuDot" class="acct-dot"></span>
+            <span id="acctMenuLabel" class="acct-menu-label">--</span>
+            <span id="acctMenuTier" class="tier" hidden></span>
+            <svg class="acct-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 6 7.5 9 4.5"/></svg>
+          </button>
+          <span id="acctStatic" class="acct"><span class="muted">Account</span><span id="acctEmail">--</span><span id="tierBadge" class="tier" hidden></span></span>
+          <div id="acctPopover" class="acct-pop" role="dialog" aria-label="Accounts" hidden></div>
+        </div>
         <button id="btnPhone" class="btn ghost sm" hidden title="Open this panel on a phone on the same network">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
           Phone
@@ -1106,6 +1301,7 @@ function renderPanelHtml() {
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const LOCAL_VAULT_TOKEN = document.querySelector('meta[name="agy-local-token"]')?.getAttribute('content') || '';
     const SESSION_COLS = 11;
     const PREFS_KEY = 'agy-check.panel.prefs.v2';
     const RANGES = { active: 'Active sessions', '24h': 'Last 24 hours', today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', all: 'All time' };
@@ -1130,6 +1326,11 @@ function renderPanelHtml() {
       ops: { archiveAvailable: true, deleteAvailable: false, endpointCount: 0, handoffCommand: 'agy-check panel handoff' },
       delModal: null,
       opsBusy: false,
+      vaultBusy: false,
+      acctMenuOpen: false,
+      acctMenuKey: '',
+      acctInline: null,
+      acctSignInConfirm: false,
       overview: null,
       detail: null,
     };
@@ -1267,7 +1468,8 @@ function renderPanelHtml() {
       const auth = data.auth || {};
       const quota = data.quota || {};
       const summary = data.summary || {};
-      renderTopbar(auth, quota, summary);
+      const vault = data.vault || null;
+      renderTopbar(auth, quota, summary, vault);
       state.lanUrls = data.lan?.urls || [];
       $('btnPhone').hidden = !data.lan;
       const expiresAt = data.viewer && data.viewer.local === false ? data.viewer.accessExpiresAt : null;
@@ -1278,21 +1480,76 @@ function renderPanelHtml() {
       $('rangeTitle').textContent = RANGES[state.range] || state.range;
       $('rangeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.range === state.range));
       renderKpis(summary);
-      renderQuota(quota, data.accounts || []);
+      renderQuota(quota, data.accounts || [], vault);
       renderModels(summary.byModel || [], summary.cost?.byModel || {});
       renderSessions(data, summary);
+      if (state.acctMenuOpen) {
+        const nextKey = computeVaultMenuKey(vault);
+        if (nextKey !== state.acctMenuKey) {
+          state.acctMenuKey = nextKey;
+          renderAcctPopover();
+        }
+      }
       if (state.detail && $('drawer').classList.contains('open')) {
         renderDetailOps(state.detail);
       }
     }
 
-    function renderTopbar(auth, quota, summary) {
-      $('acctEmail').textContent = auth.activeEmail
+    function shortTierLabel(tier) {
+      if (!tier) return '';
+      const s = String(tier).trim();
+      if (/ultra/i.test(s)) return 'Ultra';
+      if (/pro/i.test(s)) return 'Pro';
+      if (/free/i.test(s)) return 'Free';
+      return s.length > 12 ? s.slice(0, 12) : s;
+    }
+
+    function emailLocalPart(email) {
+      if (!email) return '';
+      const at = String(email).indexOf('@');
+      return at > 0 ? String(email).slice(0, at) : String(email);
+    }
+
+    function canManageVault(vault) {
+      return Boolean(vault && vault.supported && LOCAL_VAULT_TOKEN);
+    }
+
+    function computeVaultMenuKey(vault) {
+      if (!vault) return '';
+      const list = (vault.accounts || []).map(a => a.email + ':' + a.status + ':' + (a.hasRefreshToken ? 1 : 0)).join('|');
+      return (vault.activeEmail || '') + '|' + (vault.activeSaved ? 1 : 0) + '|' + (vault.activeExpired ? 1 : 0) + '|' + list;
+    }
+
+    function renderTopbar(auth, quota, summary, vault = null) {
+      const emailText = auth.activeEmail
         ? auth.activeEmail + (auth.expired ? ' (expired)' : '')
         : (auth.loggedIn ? 'Signed in' : 'Not logged in');
+      $('acctEmail').textContent = emailText;
       $('acctEmail').className = auth.expired ? 't-bad' : (auth.loggedIn ? '' : 't-warn');
       $('tierBadge').hidden = !quota.tier;
       $('tierBadge').textContent = quota.tier || '';
+
+      const interactive = canManageVault(vault);
+      $('btnAcctMenu').hidden = !interactive;
+      $('acctStatic').hidden = interactive;
+      if (interactive) {
+        const active = vault.activeEmail || auth.activeEmail || null;
+        const unsaved = Boolean(active && !vault.activeSaved);
+        const dot = $('acctMenuDot');
+        dot.className = 'acct-dot' + (!active ? ' muted' : ((unsaved || auth.expired) ? ' warn' : ''));
+        $('acctMenuLabel').textContent = active ? emailLocalPart(active) : 'Sign in';
+        const shortTier = shortTierLabel(quota.tier);
+        $('acctMenuTier').hidden = !shortTier;
+        $('acctMenuTier').textContent = shortTier;
+        const aria = active
+          ? active + (unsaved ? ' (not saved in vault)' : '') + (auth.expired ? ' (refresh needed)' : '') + ' — manage accounts'
+          : 'Not signed in — manage accounts';
+        $('btnAcctMenu').title = aria;
+        $('btnAcctMenu').setAttribute('aria-label', aria);
+      } else if (state.acctMenuOpen) {
+        closeAcctPopover(false);
+      }
+
       const syncBtn = $('btnSyncModal');
       syncBtn.hidden = !auth.syncBridgeAvailable;
       syncBtn.className = 'btn sm ' + ((summary.unsyncedCount || 0) > 0 ? 'warn' : 'ghost');
@@ -1368,7 +1625,7 @@ function renderPanelHtml() {
         '<div class="qrow-foot">' + (win.resetIn ? 'Resets in ' + esc(win.resetIn) : '&nbsp;') + '</div></div>';
     }
 
-    function renderQuota(quota, accounts) {
+    function renderQuota(quota, accounts, vault = null) {
       const providers = quota.providers || [];
       let html;
       if (providers.length === 0 || (quota.unavailableReason && providers.every(p => !p.fiveHour && !p.weekly))) {
@@ -1380,6 +1637,7 @@ function renderPanelHtml() {
           quotaRow('Weekly', p.weekly) +
           '</div>').join('') + '</div>';
       }
+
       if (accounts.length > 1) {
         html += '<div class="acct-list">' + accounts.map(a => {
           const g = (a.quota?.providers || []).find(p => p.key === 'google');
@@ -1392,6 +1650,19 @@ function renderPanelHtml() {
             '<span class="muted push">' + esc(fmtRel(a.lastRefreshed)) + '</span></div>';
         }).join('') + '</div>';
       }
+
+      if (canManageVault(vault)) {
+        const savedCount = (vault.accounts || []).length;
+        const parts = [savedCount + ' saved'];
+        if (vault.activeEmail && !vault.activeSaved) parts.push('current unsaved');
+        const refreshCnt = (vault.accounts || []).filter(a => !a.isActive && a.expired).length;
+        if (refreshCnt > 0) parts.push(refreshCnt + ' refresh needed');
+        html += '<div class="quota-vault-foot">' +
+          '<span>' + esc(parts.join(' · ')) + '</span>' +
+          '<button class="link-btn" type="button" data-open-acct-menu="1">Manage ↗</button>' +
+        '</div>';
+      }
+
       $('quotaBody').innerHTML = html;
     }
 
@@ -2576,10 +2847,431 @@ function renderPanelHtml() {
       }
     });
 
+    function openAcctPopover() {
+      const vault = state.overview?.vault || null;
+      if (!canManageVault(vault)) return;
+      state.acctMenuOpen = true;
+      state.acctInline = null;
+      state.acctSignInConfirm = false;
+      state.acctMenuKey = computeVaultMenuKey(vault);
+      renderAcctPopover();
+      const pop = $('acctPopover');
+      pop.hidden = false;
+      $('btnAcctMenu').setAttribute('aria-expanded', 'true');
+      requestAnimationFrame(() => {
+        pop.classList.add('open');
+        const firstBtn = pop.querySelector('button:not(:disabled)');
+        if (firstBtn) firstBtn.focus();
+      });
+    }
+
+    function closeAcctPopover(restoreFocus = false) {
+      if (!state.acctMenuOpen) return;
+      state.acctMenuOpen = false;
+      state.acctInline = null;
+      state.acctSignInConfirm = false;
+      const pop = $('acctPopover');
+      pop.classList.remove('open');
+      pop.hidden = true;
+      $('btnAcctMenu').setAttribute('aria-expanded', 'false');
+      if (restoreFocus && !$('btnAcctMenu').hidden) {
+        $('btnAcctMenu').focus();
+      }
+    }
+
+    function renderAcctPopover() {
+      const pop = $('acctPopover');
+      const data = state.overview || {};
+      const vault = data.vault || null;
+      const auth = data.auth || {};
+      const summary = data.summary || {};
+      if (!canManageVault(vault)) {
+        pop.innerHTML = '';
+        return;
+      }
+
+      const quotaByEmail = new Map();
+      for (const a of data.accounts || []) {
+        if (a && a.email) quotaByEmail.set(a.email.toLowerCase(), a);
+      }
+      const vaultByEmail = new Map();
+      for (const v of vault.accounts || []) {
+        if (v && v.email) vaultByEmail.set(v.email.toLowerCase(), v);
+      }
+      const emails = new Set([...vaultByEmail.keys()]);
+      if (vault.activeEmail) emails.add(vault.activeEmail.toLowerCase());
+
+      const rows = Array.from(emails).map(key => {
+        const v = vaultByEmail.get(key) || null;
+        const q = quotaByEmail.get(key) || null;
+        const email = v?.email || q?.email || key;
+        const isActive = Boolean(vault.activeEmail && email.toLowerCase() === vault.activeEmail.toLowerCase());
+        return {
+          email,
+          saved: Boolean(v),
+          isActive,
+          expired: v ? Boolean(v.expired) : (isActive && Boolean(vault.activeExpired)),
+          hasRefreshToken: v ? Boolean(v.hasRefreshToken) : (isActive && Boolean(vault.activeHasRefreshToken)),
+          tier: shortTierLabel(q?.tier || (isActive ? data.quota?.tier : null)),
+          lastRefreshed: q?.lastRefreshed || null,
+          quota: q?.quota || null,
+          sortTime: v?.lastSwitchedAt || v?.updatedAt || v?.savedAt || q?.lastRefreshed || 0,
+        };
+      }).sort((a, b) => {
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+        if (a.saved !== b.saved) return a.saved ? -1 : 1;
+        if (b.sortTime !== a.sortTime) return b.sortTime - a.sortTime;
+        return a.email.localeCompare(b.email);
+      });
+
+      const savedTotal = (vault.accounts || []).length;
+      const runningCount = summary.runningCount || 0;
+      const syncAvail = Boolean(auth.syncBridgeAvailable);
+      const trashSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+
+      let html = '<div class="acct-pop-head">' +
+        '<span>Accounts · ' + savedTotal + ' saved</span>' +
+        '<span class="sub">Local Keychain</span>' +
+      '</div>';
+
+      if (vault.activeEmail && !vault.activeSaved) {
+        html += '<div class="acct-pop-unsaved">' +
+          '<span title="' + esc(vault.activeEmail) + '"><strong>' + esc(emailLocalPart(vault.activeEmail)) + '</strong> is not saved</span>' +
+          '<button class="btn sm primary" type="button" data-acct-save="1"' + (state.vaultBusy ? ' disabled' : '') + '>Save</button>' +
+        '</div>';
+      }
+
+      if (rows.length === 0) {
+        html += '<div class="acct-pop-empty">No saved accounts yet. Sign in with agy and save your credentials to switch in one click.</div>';
+      } else {
+        html += '<div class="acct-pop-list">' + rows.map(a => {
+          const g = (a.quota?.providers || []).find(p => p.key === 'google');
+          const c = (a.quota?.providers || []).find(p => p.key === 'claude');
+          const metaParts = [];
+          if (a.tier) metaParts.push(esc(a.tier));
+          if (g?.fiveHour) metaParts.push('G ' + g.fiveHour.percent + '%');
+          if (c?.fiveHour) metaParts.push('3P ' + c.fiveHour.percent + '%');
+          if (a.lastRefreshed) metaParts.push(esc(fmtRel(a.lastRefreshed)));
+          if (a.expired) metaParts.push('<span class="warn-txt">' + (a.hasRefreshToken ? 'Refresh on next run' : 'Sign in again') + '</span>');
+          else if (!a.saved) metaParts.push('<span class="warn-txt">Not saved</span>');
+
+          const dotCls = a.isActive
+            ? ((a.expired || !a.saved) ? 'acct-dot warn' : 'acct-dot')
+            : (a.expired ? 'acct-dot warn' : (a.saved ? 'acct-dot' : 'acct-dot muted'));
+
+          const inline = state.acctInline;
+          const isRemoving = Boolean(inline && inline.email === a.email && inline.mode === 'remove');
+          const isExpandingSwitch = Boolean(inline && inline.email === a.email && inline.mode === 'switch');
+
+          let actsHtml = '';
+          if (isRemoving) {
+            actsHtml = '<div class="acct-pop-rm-confirm">' +
+              '<span>Remove?</span>' +
+              '<button class="btn xs ghost" type="button" data-acct-inline-cancel="1"' + (state.vaultBusy ? ' disabled' : '') + '>Cancel</button>' +
+              '<button class="btn xs danger solid" type="button" data-acct-remove-confirm="' + esc(a.email) + '"' + (state.vaultBusy ? ' disabled' : '') + '>Remove</button>' +
+            '</div>';
+          } else if (a.isActive) {
+            actsHtml = '<div class="acct-pop-acts">' +
+              '<span class="acct-pop-active-lbl">Active</span>' +
+              (a.saved
+                ? '<button class="btn ghost icon acct-pop-del" type="button" data-acct-remove="' + esc(a.email) + '" title="Remove saved copy (does not sign out agy)" aria-label="Remove saved copy for ' + esc(a.email) + '"' + (state.vaultBusy ? ' disabled' : '') + '>' + trashSvg + '</button>'
+                : '') +
+            '</div>';
+          } else if (a.saved) {
+            const canSwitch = !a.expired || a.hasRefreshToken;
+            actsHtml = '<div class="acct-pop-acts">' +
+              (canSwitch
+                ? '<button class="btn ghost acct-pop-btn" type="button" data-acct-switch="' + esc(a.email) + '"' + (state.vaultBusy ? ' disabled' : '') + '>Switch</button>'
+                : '<button class="btn ghost acct-pop-btn" type="button" data-acct-signin-start="1"' + (state.vaultBusy ? ' disabled' : '') + '>Sign in</button>') +
+              '<button class="btn ghost icon acct-pop-del" type="button" data-acct-remove="' + esc(a.email) + '" title="Remove saved copy (does not sign out agy)" aria-label="Remove saved copy for ' + esc(a.email) + '"' + (state.vaultBusy ? ' disabled' : '') + '>' + trashSvg + '</button>' +
+            '</div>';
+          }
+
+          let expandHtml = '';
+          if (isExpandingSwitch) {
+            expandHtml = '<div class="acct-pop-expand">' +
+              '<div><strong>' + runningCount + ' running agy ' + (runningCount === 1 ? 'window</strong> stays' : 'windows</strong> stay') + ' on ' + esc(emailLocalPart(vault.activeEmail || 'current')) + ' and may overwrite Keychain (~1h).</div>' +
+              '<div class="acct-pop-expand-acts">' +
+                (syncAvail
+                  ? '<button class="btn xs primary" type="button" data-acct-switch-sync="' + esc(a.email) + '" title="Switch account and open Sync sessions review"' + (state.vaultBusy ? ' disabled' : '') + '>Switch &amp; sync (' + runningCount + ')</button>'
+                  : '') +
+                '<button class="btn xs" type="button" data-acct-switch-only="' + esc(a.email) + '"' + (state.vaultBusy ? ' disabled' : '') + '>Switch only</button>' +
+                '<button class="btn xs ghost" type="button" data-acct-inline-cancel="1"' + (state.vaultBusy ? ' disabled' : '') + '>Cancel</button>' +
+              '</div></div>';
+          } else if (isRemoving) {
+            expandHtml = '<div class="acct-pop-expand" style="color:var(--muted)">Removes only the vault copy; active agy login and Google access are untouched.</div>';
+          }
+
+          return '<div class="acct-pop-item' + (a.isActive ? ' is-active' : '') + '">' +
+            '<div class="acct-pop-row">' +
+              '<span class="' + dotCls + '"></span>' +
+              '<div class="acct-pop-info">' +
+                '<div class="acct-pop-email" title="' + esc(a.email) + '">' + esc(a.email) + '</div>' +
+                '<div class="acct-pop-meta">' + (metaParts.join(' · ') || 'Saved in Keychain') + '</div>' +
+              '</div>' +
+              actsHtml +
+            '</div>' +
+            expandHtml +
+          '</div>';
+        }).join('') + '</div>';
+      }
+
+      if (state.acctSignInConfirm) {
+        const desc = vault.activeEmail
+          ? 'Saves <strong>' + esc(vault.activeEmail) + '</strong> to local Keychain first, clears the active login slot, and starts <code>agy</code> in a terminal for official Google sign-in.'
+          : 'Starts <code>agy</code> in a terminal for official Google sign-in.';
+        html += '<div class="acct-pop-foot"><div class="acct-pop-signin-box">' +
+          '<div>' + desc + '</div>' +
+          '<div class="acct-pop-signin-acts">' +
+            '<button class="btn xs primary" type="button" data-acct-signin-confirm="1"' + (state.vaultBusy ? ' disabled' : '') + '>Open sign-in</button>' +
+            '<button class="btn xs ghost" type="button" data-acct-signin-cancel="1"' + (state.vaultBusy ? ' disabled' : '') + '>Cancel</button>' +
+          '</div></div></div>';
+      } else {
+        html += '<div class="acct-pop-foot">' +
+          '<button class="btn ghost acct-pop-signin-btn" type="button" data-acct-signin-start="1"' + (state.vaultBusy ? ' disabled' : '') + '>' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>' +
+            'Sign in new account' +
+          '</button>' +
+        '</div>';
+      }
+
+      pop.innerHTML = html;
+      if (state.acctInline && state.acctInline.mode === 'remove') {
+        const cancelBtn = pop.querySelector('button[data-acct-inline-cancel]');
+        if (cancelBtn) cancelBtn.focus();
+      }
+    }
+
+    async function vaultPost(pathname, body) {
+      const res = await fetch(pathname, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Agy-Local-Token': LOCAL_VAULT_TOKEN,
+        },
+        body: JSON.stringify(body || {}),
+      });
+      const out = await res.json().catch(() => ({}));
+      return { ok: res.ok && out.ok !== false, status: res.status, data: out };
+    }
+
+    async function handleSaveAccount() {
+      if (state.vaultBusy || !LOCAL_VAULT_TOKEN) return;
+      state.vaultBusy = true;
+      if (state.acctMenuOpen) renderAcctPopover();
+      try {
+        const res = await vaultPost('/api/accounts/save', {});
+        if (!res.ok) {
+          showToast(res.data?.error || 'Could not save current account.', { tone: 'bad', sticky: true });
+          return;
+        }
+        const msg = res.data.keptNewer
+          ? 'Kept newer saved credential for ' + res.data.email + '.'
+          : 'Saved ' + res.data.email + ' to local Keychain.';
+        showToast(msg, { tone: 'ok' });
+        await fetchOverview();
+        if (state.acctMenuOpen) {
+          state.acctMenuKey = computeVaultMenuKey(state.overview?.vault);
+          renderAcctPopover();
+        }
+      } catch {
+        showToast('Could not reach the panel.', { tone: 'bad', sticky: true });
+      } finally {
+        state.vaultBusy = false;
+        if (state.acctMenuOpen) renderAcctPopover();
+      }
+    }
+
+    async function executeAccountSwitch(email, opts = {}) {
+      if (!email || state.vaultBusy || !LOCAL_VAULT_TOKEN) return;
+      state.vaultBusy = true;
+      state.acctInline = null;
+      $('btnAcctMenu').classList.add('switching');
+      if (state.acctMenuOpen) renderAcctPopover();
+      showToast((opts.isUndo ? 'Restoring ' : 'Switching to ') + email + '…', { sticky: true });
+      try {
+        const res = await vaultPost('/api/accounts/switch', { email });
+        if (!res.ok) {
+          showToast(res.data?.error || 'Account switch failed.', { tone: 'bad', sticky: true });
+          return;
+        }
+        closeAcctPopover(false);
+        await fetchOverview();
+        if (res.data.alreadyActive) {
+          showToast(email + ' is already active.', { tone: 'ok' });
+          return;
+        }
+        const suffix = res.data.refreshNeeded
+          ? ' (verified · refreshes on next agy run)'
+          : (res.data.quotaRefreshed ? ' (verified · quota refreshed)' : ' (verified)');
+        const toastOpts = { tone: 'ok', duration: 10000 };
+        if (!opts.isUndo && res.data.canUndo && res.data.previousEmail) {
+          toastOpts.action = {
+            label: 'Undo',
+            attr: 'data-undo-switch="' + esc(res.data.previousEmail) + '"',
+          };
+        }
+        showToast('Switched to ' + res.data.email + suffix, toastOpts);
+        if (opts.openSync && state.overview?.auth?.syncBridgeAvailable) {
+          openSyncModal();
+        }
+      } catch {
+        showToast('Could not reach the panel.', { tone: 'bad', sticky: true });
+      } finally {
+        state.vaultBusy = false;
+        $('btnAcctMenu').classList.remove('switching');
+        if (state.acctMenuOpen) renderAcctPopover();
+      }
+    }
+
+    async function handleRemoveAccount(email) {
+      if (!email || state.vaultBusy || !LOCAL_VAULT_TOKEN) return;
+      state.vaultBusy = true;
+      state.acctInline = null;
+      if (state.acctMenuOpen) renderAcctPopover();
+      try {
+        const res = await vaultPost('/api/accounts/remove', { email });
+        if (!res.ok) {
+          showToast(res.data?.error || 'Could not remove saved account.', { tone: 'bad', sticky: true });
+          return;
+        }
+        showToast('Removed saved copy for ' + res.data.email + ' (agy login unchanged).', { tone: 'ok' });
+        await fetchOverview();
+        if (state.acctMenuOpen) {
+          state.acctMenuKey = computeVaultMenuKey(state.overview?.vault);
+          renderAcctPopover();
+        }
+      } catch {
+        showToast('Could not reach the panel.', { tone: 'bad', sticky: true });
+      } finally {
+        state.vaultBusy = false;
+        if (state.acctMenuOpen) renderAcctPopover();
+      }
+    }
+
+    async function handleSignInNewAccount() {
+      if (state.vaultBusy || !LOCAL_VAULT_TOKEN) return;
+      state.vaultBusy = true;
+      state.acctSignInConfirm = false;
+      if (state.acctMenuOpen) renderAcctPopover();
+      try {
+        const res = await vaultPost('/api/accounts/sign-in', { launchTerminal: true });
+        if (!res.ok) {
+          showToast(res.data?.error || 'Could not start sign-in.', { tone: 'bad', sticky: true });
+          return;
+        }
+        closeAcctPopover(false);
+        await fetchOverview();
+        const savedNote = res.data.backedUpEmail ? 'Saved ' + res.data.backedUpEmail + ' to Keychain. ' : '';
+        const nextNote = res.data.launchedTerminal
+          ? 'Opened agy in a terminal — finish Google sign-in there, then click Save here.'
+          : 'Active login cleared — run agy in a terminal to complete Google sign-in, then click Save here.';
+        showToast(savedNote + nextNote, { tone: 'ok', duration: 10000 });
+      } catch {
+        showToast('Could not reach the panel.', { tone: 'bad', sticky: true });
+      } finally {
+        state.vaultBusy = false;
+        if (state.acctMenuOpen) renderAcctPopover();
+      }
+    }
+
+    $('btnAcctMenu').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.acctMenuOpen) closeAcctPopover(false);
+      else openAcctPopover();
+    });
+
+    $('quotaBody').addEventListener('click', (e) => {
+      if (e.target.closest('button[data-open-acct-menu]')) {
+        e.stopPropagation();
+        openAcctPopover();
+      }
+    });
+
+    $('acctPopover').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.vaultBusy) return;
+      if (e.target.closest('button[data-acct-save]')) {
+        handleSaveAccount();
+        return;
+      }
+      if (e.target.closest('button[data-acct-inline-cancel]')) {
+        state.acctInline = null;
+        renderAcctPopover();
+        return;
+      }
+      if (e.target.closest('button[data-acct-signin-start]')) {
+        state.acctInline = null;
+        state.acctSignInConfirm = true;
+        renderAcctPopover();
+        return;
+      }
+      if (e.target.closest('button[data-acct-signin-cancel]')) {
+        state.acctSignInConfirm = false;
+        renderAcctPopover();
+        return;
+      }
+      if (e.target.closest('button[data-acct-signin-confirm]')) {
+        handleSignInNewAccount();
+        return;
+      }
+      const swBtn = e.target.closest('button[data-acct-switch]');
+      if (swBtn) {
+        const email = swBtn.dataset.acctSwitch;
+        state.acctSignInConfirm = false;
+        const running = state.overview?.summary?.runningCount || 0;
+        if (running > 0) {
+          state.acctInline = (state.acctInline && state.acctInline.email === email && state.acctInline.mode === 'switch')
+            ? null
+            : { email, mode: 'switch' };
+          renderAcctPopover();
+        } else {
+          executeAccountSwitch(email, { openSync: false });
+        }
+        return;
+      }
+      const swOnly = e.target.closest('button[data-acct-switch-only]');
+      if (swOnly) {
+        executeAccountSwitch(swOnly.dataset.acctSwitchOnly, { openSync: false });
+        return;
+      }
+      const swSync = e.target.closest('button[data-acct-switch-sync]');
+      if (swSync) {
+        executeAccountSwitch(swSync.dataset.acctSwitchSync, { openSync: true });
+        return;
+      }
+      const rmBtn = e.target.closest('button[data-acct-remove]');
+      if (rmBtn) {
+        const email = rmBtn.dataset.acctRemove;
+        state.acctSignInConfirm = false;
+        state.acctInline = (state.acctInline && state.acctInline.email === email && state.acctInline.mode === 'remove')
+          ? null
+          : { email, mode: 'remove' };
+        renderAcctPopover();
+        return;
+      }
+      const rmConfirm = e.target.closest('button[data-acct-remove-confirm]');
+      if (rmConfirm) {
+        handleRemoveAccount(rmConfirm.dataset.acctRemoveConfirm);
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (state.acctMenuOpen && !e.target.closest('#acctMenuWrap')) {
+        closeAcctPopover(false);
+      }
+    });
+
     $('btnToastClose').addEventListener('click', hideToast);
     document.addEventListener('click', async (e) => {
       if (e.target.closest('button[data-reload-page]')) {
         location.reload();
+        return;
+      }
+      const undoBtn = e.target.closest('button[data-undo-switch]');
+      if (undoBtn) {
+        const prevEmail = undoBtn.dataset.undoSwitch;
+        if (prevEmail) executeAccountSwitch(prevEmail, { openSync: false, isUndo: true });
         return;
       }
       const btn = e.target.closest('button[data-copy-handoff]');
@@ -2700,6 +3392,12 @@ function renderPanelHtml() {
           $('syncExecStatus').innerHTML = '<span class="pill ok">Sync completed</span>';
           $('syncRawOutput').textContent = out.output || 'Sync finished.';
           await fetchOverview();
+          if (!opsState().deleteAvailable) {
+            $('syncExecStatus').innerHTML =
+              '<span class="pill ok">Sync completed</span>' +
+              '<div class="handoff"><span>Restarted agy windows rotated their local API ports, so permanent delete needs a fresh connection.</span> ' +
+              handoffHtml() + '</div>';
+          }
         } else {
           $('syncExecStatus').innerHTML = '<span class="pill bad">' + esc(out.error || 'Sync failed') + '</span>';
           if (out.output) $('syncRawOutput').textContent = out.output;
@@ -2717,6 +3415,12 @@ function renderPanelHtml() {
         if ($('deleteModal').classList.contains('open')) closeDeleteModal();
         else if ($('lanModal').classList.contains('open')) closeLanModal();
         else if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
+        else if (state.acctMenuOpen && (state.acctInline || state.acctSignInConfirm)) {
+          state.acctInline = null;
+          state.acctSignInConfirm = false;
+          renderAcctPopover();
+        }
+        else if (state.acctMenuOpen) closeAcctPopover(true);
         else if (state.selectedId) closeDetail();
         else if (state.selectMode || state.checkedIds.size > 0) clearSelection();
         return;

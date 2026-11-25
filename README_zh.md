@@ -22,7 +22,7 @@
 
 - **多端与远程服务器实时同步**：终端状态栏、电脑浏览器、手机/平板（PWA、6 位配对码、30 天免重登）、局域网、TUN 虚拟组网（Tailscale / ZeroTier / WireGuard）及无头服务器（`--lan --networks <cidr>` 或 SSH 隧道）全打通。
 - **任意屏幕直接管理会话**：搜索筛选、持久化重命名（同步回写 `agy` 真实数据源，`/resume` 立即可见）、归档 / 取消归档，以及 **Select** 多选 / 全选批量归档与安全永久删除（检测运行中窗口并二次确认）。
-- **多账号与缓存洞察**：多账号 5h / 每周配额对照、切号残留 `unsynced` 窗口告警、按时间范围估算 API 费用、自动标注缓存未命中原因。
+- **多账号与缓存洞察**：多账号 5h / 每周配额对照、系统钥匙串凭证保存与本机桌面一键切号、切号残留 `unsynced` 窗口告警、按时间范围估算 API 费用、自动标注缓存未命中原因。
 - **开箱即用、纯本地零负担**：零运行时依赖、`agy` 内 `/check` 零 token 响应、无遥测，默认仅监听 `127.0.0.1`。
 
 | 想在哪里看 | 启动命令 | 说明 |
@@ -149,6 +149,7 @@ agy-check panel stop                                 停止后台面板
 agy-check ls [--range 24h] [--sort recent]           输出会话表
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
 agy-check session <id-prefix> [--json]               逐轮缓存命中率与未命中诊断
+agy-check account [list|save|switch|sign-in|remove]  系统钥匙串多账号凭证保存、登新号与一键切换（仅本机）
 agy-check sync [--apply]                             预览（默认）或执行账号同步
 agy-check config                                     状态栏配置向导
 agy-check update                                     更新运行时
@@ -162,7 +163,7 @@ agy-check update                                     更新运行时
 
 相比原版 [`agy-hud`](https://github.com/icebear0828/agy-hud)，状态栏新增基于 Hook 计时的输出速度（含思考总速 `out` 与扣除工具耗时后的可见净速 `net≈`）、累计工具耗时 `tooltime`、默认开启且精确计入冷启动 `0.0%` 与整会话 `avg` 的缓存命中率、原生 `antigravity-cli` 日志解析，以及按账号隔离的配额缓存。
 
-- **多账号配额与旧窗口检测**：按账号邮箱保存配额快照，切号后仍可对照查看非活跃账号上次保存的余量；已打开但内存中仍持旧登录的 `agy` 窗口会在面板、CLI 和自身状态栏标为 **unsynced**。
+- **多账号配额、凭证保存与一键切号**：按账号邮箱保存配额快照，切号后仍可对照查看非活跃账号上次保存的余量。在 macOS（及带 `secret-tool` 的 Linux）上，本机桌面面板顶栏账号菜单与 `agy-check account` 命令行可将各账号凭证安全保存在系统钥匙串（`agy-check-vault`，零明文落盘、绝不下发浏览器），支持自动备份当前号后登录新账号以及一键切换当前 `agy` 登录（切前自动回存当前账号、写后回读校验、Undo 撤销、严格仅限本机 `127.0.0.1`，局域网/TUN 手机返回 `403`）。已打开但内存中仍持旧登录的 `agy` 窗口会在面板、CLI 和自身状态栏标为 **unsynced**。
 - **可选账号同步脚本**：若你通过 `AGY_SYNC_SCRIPT` 提供了外部脚本（默认 `~/tool-scripts/agy/agy-sync-keychain.sh`，不在本仓库内），面板会先跑 `--dry-run` 预览，本机确认后才执行；无脚本时按钮自动隐藏。
 
 ---
@@ -176,7 +177,37 @@ agy-check update                                     更新运行时
 | **估算 API 费用** | `transcript.jsonl` + [`runtime/cost.js`](./runtime/cost.js) | 按每轮发生时的 Google 官方牌价估算；未知模型标为 **unpriced**；会员额度不按 token 计费 |
 | **配额与多账号漂移** | Antigravity 配额接口 + 本地钥匙串 / 锁文件 | 按账号邮箱缓存快照；切号后仍持旧登录的窗口标为 **unsynced** |
 | **标题、归档与永久删除** | `agy` 本地接口 / `annotations/*.pbtxt` | 直接同步至 `agy` 数据源；永久删除走 `DeleteConversation`（需要时用 `agy-check panel handoff`） |
+| **多账号凭证保存与切换** | 系统钥匙串（`agy-check-vault`）+ `agy-check-vault-meta.json`（`0600`） | 纯钥匙串原样切换（不逆向二进制）；过期 token 下次运行 `agy` 自动续期；仅本机桌面可用（手机端 `403`） |
 | **状态栏配置** | `agy-check config` 或 `agy-hud.config.json` | 交互向导调整主题、速度 / 缓存 / 费用开关、配额样式（`table`/`compact`/`models`）及 Nerd Fonts |
+
+## 配置
+
+运行 `agy-check config` 或编辑 `~/.gemini/antigravity-cli/agy-hud-runtime/runtime/agy-hud.config.json`（支持项目根目录 `./agy-hud.config.json` 覆盖）。
+
+<details>
+<summary>查看默认 <code>agy-hud.config.json</code> 示例</summary>
+
+```json
+{
+  "display": {
+    "useNerdFonts": false,
+    "showSpeed": true,
+    "showToolTime": true,
+    "showTurnCacheHitRate": true,
+    "showSessionCacheHitRate": true,
+    "cacheSmoothing": false,
+    "quotaStyle": "table",
+    "showCost": false
+  },
+  "thresholds": {
+    "warning": 0.7,
+    "critical": 0.9
+  },
+  "language": "auto"
+}
+```
+
+</details>
 
 ---
 

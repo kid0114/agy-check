@@ -22,7 +22,7 @@
 
 - **Multi-device & remote server live sync:** Watch and control every `agy` session from terminal HUD, desktop browser, phone/tablet (PWA, 6-digit pairing, 30-day sign-in), LAN, TUN overlay (`Tailscale` / `ZeroTier` / `WireGuard`), or headless server (`--lan --networks <cidr>` or SSH tunnel).
 - **Manage sessions anywhere:** Search, rename (persisted to `agy`'s source of truth), archive/unarchive, and **Select All** bulk archive or safe permanent delete (with running-window check).
-- **Multi-account & cache visibility:** 5h/weekly quota across accounts, stale `unsynced` window warnings, range-based API cost estimates, and automatic cache-miss diagnosis.
+- **Multi-account & cache visibility:** 5h/weekly quota across accounts, OS-keyring credential vault with 1-click desktop account switching, stale `unsynced` window warnings, range-based API cost estimates, and automatic cache-miss diagnosis.
 - **Zero-effort, local-first:** Zero runtime deps, zero-token `/check` inside `agy`, no telemetry, `127.0.0.1`-only until you enable `--lan`.
 
 | Where you want to view | Command | Notes |
@@ -149,6 +149,7 @@ agy-check panel stop                                 Stop the background dashboa
 agy-check ls [--range 24h] [--sort recent]           Print the session table
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
 agy-check session <id-prefix> [--json]               Per-turn cache hit rate and miss diagnosis
+agy-check account [list|save|switch|sign-in|remove]  Manage saved agy credentials in OS keyring (local only)
 agy-check sync [--apply]                             Preview (default) or run account sync
 agy-check config                                     Status line configuration wizard
 agy-check update                                     Update the runtime
@@ -162,7 +163,7 @@ agy-check update                                     Update the runtime
 
 Compared with upstream [`agy-hud`](https://github.com/icebear0828/agy-hud), the status line adds hook-timed output speed (`out` total with thinking and `net≈` visible text speed, excluding tool wait), cumulative `tooltime`, exact on-by-default cache hit rate (`0.0%` cold turns + whole-session `avg`), native `antigravity-cli` transcript parsing, and per-account quota caching.
 
-- **Multi-account quota & drift detection:** Quota snapshots are cached per account email so you can view inactive accounts' last saved quota alongside the active login. After switching accounts, older `agy` windows that still hold the previous login in memory are flagged **unsynced** in the dashboard, CLI, and their own status line.
+- **Multi-account quota, saved credentials & drift detection:** Quota snapshots are cached per account email so you can view inactive accounts' last saved quota alongside the active login. On macOS (and Linux with `secret-tool`), the topbar account menu on the local desktop panel and `agy-check account` CLI can save accounts into the OS keyring (`agy-check-vault`, never plaintext or sent to the browser), start signing in a new account (auto-backing up the active login first), and switch the active `agy` login in one click (with automatic backup before overwrite, read-back verification, Undo toast, and strict `127.0.0.1`-only enforcement — `403` for paired phones). After switching accounts, older `agy` windows that still hold the previous login in memory are flagged **unsynced** in the dashboard, CLI, and their own status line.
 - **Optional Sync sessions script:** If you provide a script via `AGY_SYNC_SCRIPT` (default `~/tool-scripts/agy/agy-sync-keychain.sh`, not included in this repo), the dashboard runs `--dry-run` first and executes only after explicit local confirmation. The button stays hidden when no script is present.
 
 ---
@@ -176,7 +177,37 @@ Compared with upstream [`agy-hud`](https://github.com/icebear0828/agy-hud), the 
 | **Estimated API cost** | `transcript.jsonl` + [`runtime/cost.js`](./runtime/cost.js) | Google API / partner-model list rates per turn; unknown models show **unpriced**; membership usage isn't billed per token |
 | **Quota & multi-account drift** | Antigravity quota API + local Keychain/session locks | Cached per account email; flags open windows still holding a previous login as **unsynced** |
 | **Session titles, archive & delete** | `agy` local API / `annotations/*.pbtxt` | Persists to `agy`'s source of truth; permanent delete uses `DeleteConversation` (`agy-check panel handoff` if needed) |
+| **Saved accounts & switching** | OS keyring (`agy-check-vault`) + `agy-check-vault-meta.json` (`0600`) | Pure keyring swap (zero binary scanning); expired tokens refresh on next `agy` run; local desktop only (`403` on LAN/TUN) |
 | **HUD configuration** | `agy-check config` or `agy-hud.config.json` | Interactive wizard for theme, speed/cache/cost toggles, quota style (`table`/`compact`/`models`), and Nerd Fonts |
+
+## Configuration
+
+Run `agy-check config` or edit `~/.gemini/antigravity-cli/agy-hud-runtime/runtime/agy-hud.config.json` (optional per-project `./agy-hud.config.json`).
+
+<details>
+<summary>Default <code>agy-hud.config.json</code> example</summary>
+
+```json
+{
+  "display": {
+    "useNerdFonts": false,
+    "showSpeed": true,
+    "showToolTime": true,
+    "showTurnCacheHitRate": true,
+    "showSessionCacheHitRate": true,
+    "cacheSmoothing": false,
+    "quotaStyle": "table",
+    "showCost": false
+  },
+  "thresholds": {
+    "warning": 0.7,
+    "critical": 0.9
+  },
+  "language": "auto"
+}
+```
+
+</details>
 
 ---
 
