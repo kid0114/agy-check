@@ -23,6 +23,7 @@ describe('panel UI session ops', () => {
     const html = renderPanelHtml();
     const requiredIds = [
       'btnToggleArchived',
+      'btnSelectMode',
       'selectAll',
       'btnArchiveDetail',
       'btnArchiveDetailLabel',
@@ -31,6 +32,7 @@ describe('panel UI session ops', () => {
       'detailOpsNote',
       'bulkBar',
       'bulkCount',
+      'btnBulkSelectAll',
       'btnBulkArchive',
       'btnBulkUnarchive',
       'bulkDeleteWrap',

@@ -516,6 +516,8 @@ function renderPanelHtml() {
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
     /* Selection, bulk actions and session ops (archive / delete) */
+    table.sessions:not(.select-mode) { min-width: 1060px; }
+    table.sessions:not(.select-mode) th.c-sel, table.sessions:not(.select-mode) td.c-sel { display: none; }
     table.sessions th.c-sel, table.sessions td.c-sel { width: 46px; padding: 0 0 0 6px; text-align: center; }
     .sel-hit { display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; cursor: pointer; }
     .sel-hit input, #selectAll { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
@@ -547,6 +549,7 @@ function renderPanelHtml() {
       border-radius: 12px;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
     }
+    .bulk-head { display: flex; align-items: center; gap: 8px; }
     .bulk-count { font-weight: 600; white-space: nowrap; }
     .bulk-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     body.bulk-open .app { padding-bottom: 120px; }
@@ -734,13 +737,15 @@ function renderPanelHtml() {
       table.turns td.diag { min-width: 0; }
       .modal { padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
 
-      /* Selection checkbox pinned to the card's left edge, with a 44px touch target. */
-      #sessionsBody > tr[data-id] { position: relative; padding-left: 52px; }
+      /* Selection checkbox appears only in Select mode, pinned to the card's left edge with a 44px touch target. */
+      #sessTable:not(.select-mode) #sessionsBody > tr[data-id] > td.c-sel { display: none; }
+      #sessTable.select-mode #sessionsBody > tr[data-id] { position: relative; padding-left: 52px; }
       #sessionsBody > tr.checked:not(.selected) { background: rgba(124, 156, 255, 0.07); }
-      #sessionsBody > tr[data-id] > td.c-sel { position: absolute; left: 4px; top: 6px; width: 44px; }
+      #sessTable.select-mode #sessionsBody > tr[data-id] > td.c-sel { display: block; position: absolute; left: 4px; top: 6px; width: 44px; }
       .sel-hit { width: 44px; min-height: 44px; }
       .sel-hit input { width: 20px; height: 20px; }
       .bulk-bar { left: 10px; right: 10px; transform: none; max-width: none; padding: 10px 12px; }
+      .bulk-head { flex: 1 1 100%; justify-content: space-between; }
       .bulk-count { flex: 1 1 auto; }
       .bulk-actions { flex: 1 1 100%; flex-wrap: nowrap; }
       .bulk-actions > .btn, .bulk-actions > .ops-wrap { flex: 1 1 0; min-width: 0; }
@@ -833,6 +838,7 @@ function renderPanelHtml() {
           <button id="btnToggleEmpty" class="btn toggle" aria-pressed="false">Show empty</button>
           <button id="btnToggleArchived" class="btn toggle" aria-pressed="false">Show archived</button>
           <button id="btnToggleCost" class="btn toggle" aria-pressed="false">Show cost</button>
+          <button id="btnSelectMode" class="btn toggle" type="button" aria-pressed="false">Select</button>
         </div>
       </div>
       <div class="table-scroll">
@@ -927,14 +933,17 @@ function renderPanelHtml() {
   </aside>
 
   <div id="bulkBar" class="bulk-bar" role="region" aria-label="Bulk session actions" hidden>
-    <span id="bulkCount" class="bulk-count">0 selected</span>
+    <div class="bulk-head">
+      <span id="bulkCount" class="bulk-count">0 selected</span>
+      <button id="btnBulkSelectAll" class="btn sm ghost" type="button" aria-label="Select all visible sessions">Select all</button>
+      <button id="btnBulkClear" class="btn sm ghost" type="button" aria-label="Exit selection mode">Done</button>
+    </div>
     <div class="bulk-actions">
       <button id="btnBulkArchive" class="btn sm" type="button" aria-label="Archive selected sessions">Archive</button>
       <button id="btnBulkUnarchive" class="btn sm" type="button" aria-label="Unarchive selected sessions">Unarchive</button>
       <span id="bulkDeleteWrap" class="ops-wrap">
         <button id="btnBulkDelete" class="btn sm danger" type="button" aria-label="Delete selected sessions permanently">Delete</button>
       </span>
-      <button id="btnBulkClear" class="btn sm ghost" type="button" aria-label="Clear selection">Clear</button>
     </div>
   </div>
 
@@ -1023,6 +1032,7 @@ function renderPanelHtml() {
       showCost: true,
       showEmpty: false,
       showArchived: false,
+      selectMode: false,
       selectedId: null,
       checkedIds: new Set(),
       ops: { archiveAvailable: true, deleteAvailable: false, endpointCount: 0, handoffCommand: 'agy-check panel handoff' },
@@ -1488,6 +1498,9 @@ function renderPanelHtml() {
       $('btnToggleArchived').setAttribute('aria-pressed', String(state.showArchived));
       $('btnToggleCost').setAttribute('aria-pressed', String(state.showCost));
       $('sessTable').classList.toggle('hide-cost', !state.showCost);
+      $('sessTable').classList.toggle('select-mode', state.selectMode);
+      $('btnSelectMode').setAttribute('aria-pressed', String(state.selectMode));
+      $('btnSelectMode').textContent = state.selectMode ? 'Done' : 'Select';
       updateAccountFilter(data.accounts || [], sessions, summary);
       updateSortHeaders();
 
@@ -1497,7 +1510,7 @@ function renderPanelHtml() {
       }
 
       $('sessionsBody').innerHTML = sessions.length === 0
-        ? '<tr><td colspan="' + SESSION_COLS + '" class="empty">No sessions match the current filter.</td></tr>'
+        ? '<tr><td colspan="' + (state.selectMode ? SESSION_COLS : SESSION_COLS - 1) + '" class="empty">No sessions match the current filter.</td></tr>'
         : sessions.map(sessionRow).join('');
       updateBulkBar();
     }
@@ -2001,37 +2014,62 @@ function renderPanelHtml() {
       });
     }
 
+    function setSelectMode(on) {
+      state.selectMode = Boolean(on);
+      if (!state.selectMode) state.checkedIds.clear();
+      $('sessTable').classList.toggle('select-mode', state.selectMode);
+      $('btnSelectMode').setAttribute('aria-pressed', String(state.selectMode));
+      $('btnSelectMode').textContent = state.selectMode ? 'Done' : 'Select';
+      syncRowChecks();
+      updateBulkBar();
+    }
+
+    function toggleSelectAllVisible() {
+      const sessions = (state.overview?.sessions || []).filter(isSelectableSession);
+      const allSelected = sessions.length > 0 && sessions.every(s => state.checkedIds.has(s.conversationId));
+      if (allSelected) {
+        state.checkedIds.clear();
+      } else {
+        for (const s of sessions) state.checkedIds.add(s.conversationId);
+      }
+      syncRowChecks();
+      updateBulkBar();
+    }
+
     function updateBulkBar() {
       const sessions = state.overview?.sessions || [];
       const selectable = sessions.filter(isSelectableSession);
       const count = state.checkedIds.size;
+      const allSelected = selectable.length > 0 && selectable.every(s => state.checkedIds.has(s.conversationId));
       const selectAll = $('selectAll');
       selectAll.disabled = selectable.length === 0;
-      selectAll.checked = selectable.length > 0 && selectable.every(s => state.checkedIds.has(s.conversationId));
-      selectAll.indeterminate = count > 0 && !selectAll.checked;
+      selectAll.checked = allSelected;
+      selectAll.indeterminate = count > 0 && !allSelected;
 
+      const showBar = state.selectMode || count > 0;
       const bar = $('bulkBar');
-      bar.hidden = count === 0;
-      document.body.classList.toggle('bulk-open', count > 0);
-      if (count === 0) return;
+      bar.hidden = !showBar;
+      document.body.classList.toggle('bulk-open', showBar);
+      if (!showBar) return;
 
-      $('bulkCount').textContent = count + (count === 1 ? ' session selected' : ' sessions selected');
+      $('bulkCount').textContent = count + (count === 1 ? ' selected' : ' selected');
+      $('btnBulkSelectAll').disabled = state.opsBusy || selectable.length === 0;
+      $('btnBulkSelectAll').textContent = allSelected ? 'Deselect all' : 'Select all';
+
       const selectedRows = selectable.filter(s => state.checkedIds.has(s.conversationId));
       const anyActive = selectedRows.some(s => !s.archived);
       const anyArchived = selectedRows.some(s => s.archived);
-      $('btnBulkArchive').disabled = state.opsBusy || !anyActive;
-      $('btnBulkUnarchive').disabled = state.opsBusy || !anyArchived;
+      $('btnBulkArchive').disabled = state.opsBusy || count === 0 || !anyActive;
+      $('btnBulkUnarchive').disabled = state.opsBusy || count === 0 || !anyArchived;
 
       const delReady = Boolean(opsState().deleteAvailable);
-      $('btnBulkDelete').disabled = state.opsBusy || !delReady;
-      $('bulkDeleteWrap').classList.toggle('blocked', !delReady);
+      $('btnBulkDelete').disabled = state.opsBusy || count === 0 || !delReady;
+      $('bulkDeleteWrap').classList.toggle('blocked', count > 0 && !delReady);
       $('bulkDeleteWrap').title = delReady ? 'Permanently delete selected sessions' : deleteBlockedTip();
     }
 
     function clearSelection() {
-      state.checkedIds.clear();
-      syncRowChecks();
-      updateBulkBar();
+      setSelectMode(false);
     }
 
     async function runArchive(ids, archived, opts = {}) {
@@ -2060,6 +2098,7 @@ function renderPanelHtml() {
         const badItems = out.results.filter(r => !r.ok);
         if (opts.fromBulk) {
           for (const r of okItems) state.checkedIds.delete(r.conversationId);
+          if (badItems.length === 0 && state.checkedIds.size === 0) setSelectMode(false);
         }
         const past = archived ? 'Archived' : 'Unarchived';
         if (badItems.length === 0) {
@@ -2249,6 +2288,7 @@ function renderPanelHtml() {
         if (badItems.length === 0) {
           m.busy = false;
           closeDeleteModal();
+          if (state.selectMode && state.checkedIds.size === 0) setSelectMode(false);
           const msg = 'Deleted ' + okItems.length + (okItems.length === 1 ? ' session' : ' sessions') +
             (closedCount > 0 ? ' and closed ' + closedCount + (closedCount === 1 ? ' agy window' : ' agy windows') : '') + '.';
           showToast(msg, { tone: 'ok' });
@@ -2328,6 +2368,9 @@ function renderPanelHtml() {
       $('sessTable').classList.toggle('hide-cost', !state.showCost);
     });
 
+    $('btnSelectMode').addEventListener('click', () => setSelectMode(!state.selectMode));
+    $('btnBulkSelectAll').addEventListener('click', toggleSelectAllVisible);
+
     $('selectAll').addEventListener('change', (e) => {
       const sessions = (state.overview?.sessions || []).filter(isSelectableSession);
       if (e.target.checked) {
@@ -2355,6 +2398,15 @@ function renderPanelHtml() {
       if (e.target.closest('.c-sel')) return;
       const tr = e.target.closest('tr[data-id]');
       if (!tr) return;
+      if (state.selectMode) {
+        const id = tr.dataset.id;
+        if (!isSelectableSession(sessionLookup(id))) return;
+        if (state.checkedIds.has(id)) state.checkedIds.delete(id);
+        else state.checkedIds.add(id);
+        syncRowChecks();
+        updateBulkBar();
+        return;
+      }
       if (tr.dataset.id === state.selectedId) {
         closeDetail();
         return;
@@ -2559,7 +2611,7 @@ function renderPanelHtml() {
         else if ($('lanModal').classList.contains('open')) closeLanModal();
         else if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
         else if (state.selectedId) closeDetail();
-        else if (state.checkedIds.size > 0) clearSelection();
+        else if (state.selectMode || state.checkedIds.size > 0) clearSelection();
         return;
       }
       if (!state.selectedId || $('deleteModal').classList.contains('open') || $('syncModal').classList.contains('open') || $('lanModal').classList.contains('open')) return;
