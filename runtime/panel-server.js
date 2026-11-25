@@ -708,7 +708,11 @@ function createPanelServer(options = {}) {
           return;
         }
         const body = await readJsonBody(req);
-        const renamer = options.sessionRenamer || ((convId, title) => renameConversationTitle(convId, title, { rootDir, summaryCache }));
+        const renamer = options.sessionRenamer || ((convId, title) => renameConversationTitle(convId, title, {
+          rootDir,
+          summaryCache,
+          ...(options.lsEndpoint !== undefined ? { lsEndpoint: options.lsEndpoint } : {}),
+        }));
         const result = await renamer(id, body?.title);
         if (!result || !result.ok) {
           sendJson(res, result?.status || 400, { ok: false, error: result?.error || 'Rename failed' });

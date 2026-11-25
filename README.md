@@ -90,7 +90,7 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 - **Quota**: 5-hour and weekly remaining for the Gemini and third-party (3P) allowances, with reset times. With more than one account, each account gets its own row.
 - **Models**: sessions, turns, input tokens, cost and cache hit rate per model.
 - **Sessions**: status, title, directory and branch, model, turns and cache misses, hit rate (session and last turn), tokens, context use, speed, tool and API time, and cost. Click a column header to sort. You can also search, filter by account, and show empty sessions.
-- **Session detail**: click a row to open it. `↑` / `↓` move between sessions, `F2` (or clicking the title / pencil icon) renames the session, and `Esc` closes the panel. Renames are written directly to `agy`'s `conversation_summaries.db` so `/resume`, the dashboard and the CLI all stay in sync (if the session is currently open in an active `agy` window, that window may overwrite the title on its next turn).
+- **Session detail**: click a row to open it. `↑` / `↓` move between sessions, `F2` (or clicking the title / pencil icon) renames the session, and `Esc` closes the panel. Save is a synchronous request: the dashboard writes the title to `agy`'s own source of truth before it answers, so `/resume`, the dashboard and the CLI keep the new name after any refresh. It uses `agy`'s documented `ConversationService/UpdateConversation` API when the dashboard was started from an `agy` session (loopback address and CSRF token inherited from `agy`, never sent to the browser); otherwise it updates the `title` field in `annotations/<id>.pbtxt`, leaving pinned, starred, tags and other fields untouched. The note under the title shows which path was used.
 
 ![Session detail](./assets/panel-session-detail.png)
 
@@ -318,12 +318,13 @@ Or edit the file directly:
 agy-check only reads local files that `agy` and its own hooks write:
 
 - `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`: turns, token counts, timestamps.
-- `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts (queried with `PRAGMA query_only = ON`, and updated in a transaction only when you rename a session from the dashboard, keeping `title`, `raw_summary` and `conversations_fts` in sync).
+- `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts (queried with `PRAGMA query_only = ON`, and updated in a transaction only when you rename a session from the dashboard, keeping `title`, `raw_summary` and `conversations_fts` in sync). This is an index that `agy` regenerates, so it is never the only place a rename is written.
+- `~/.gemini/antigravity-cli/annotations/<id>.pbtxt`: `agy`'s user-editable conversation metadata. Written (only the `title` field, atomically) when you rename a session and `agy`'s local API is not available.
 - `~/.gemini/antigravity-cli/speed-cache/` and `sessions/`: hook timings and per-session snapshots written by agy-check.
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
 - The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
 
-The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. There is no telemetry.
+The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. Renames may also call `agy`'s own language server on a loopback address. There is no telemetry.
 
 ---
 

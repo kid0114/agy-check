@@ -28,6 +28,8 @@ const {
   parseTranscriptMetrics,
   getSqliteCacheStamp,
   updateSummaryBlobTitle,
+  setTextProtoStringField,
+  resolveLsEndpoint,
   renameConversationTitle,
   loadConversationSummaries,
   diagnoseTurnCacheMiss,
@@ -788,10 +790,18 @@ describe('multi-session panel & account-sync', () => {
       assert.ok(stampBefore && stampBefore.stamp);
 
       // Rename via helper (writes in WAL mode)
-      const res = renameConversationTitle(convId, "Updated '标题' v2", { rootDir: tmp, summaryCache });
+      const annFile = path.join(tmp, 'annotations', `${convId}.pbtxt`);
+      fs.mkdirSync(path.dirname(annFile), { recursive: true });
+      fs.writeFileSync(annFile, `title:"${origTitle}"  starred:true  tags:"keep"`);
+      const res = await renameConversationTitle(convId, "Updated '标题' \"v2\"", { rootDir: tmp, summaryCache, lsEndpoint: false });
       assert.equal(res.ok, true);
-      assert.equal(res.title, "Updated '标题' v2");
+      assert.equal(res.title, "Updated '标题' \"v2\"");
       assert.equal(res.previousTitle, origTitle);
+      assert.equal(res.via, 'annotations-file');
+      assert.equal(res.indexSynced, true);
+      // agy's source of truth gets the title; other annotations survive untouched
+      assert.equal(fs.readFileSync(annFile, 'utf8'), 'title:"Updated \'标题\' \\"v2\\""  starred:true  tags:"keep"');
+      assert.equal(fs.readdirSync(path.dirname(annFile)).length, 1, 'no temp files left behind');
 
       // Verify both DB columns, raw_summary blob, and FTS row were updated (even when WAL has checkpointed & removed -shm)
       const dbOut = execFileSync(sqliteBin, [
@@ -801,14 +811,14 @@ describe('multi-session panel & account-sync', () => {
         `SELECT s.title AS stitle, hex(s.raw_summary) AS rhex, f.title AS ftitle FROM conversation_summaries s JOIN conversations_fts f ON s.conversation_id = f.conversation_id WHERE s.conversation_id = '${convId}' AND f.chunk_index = -1;`,
       ], { encoding: 'utf8' });
       const [row] = JSON.parse(dbOut);
-      assert.equal(row.stitle, "Updated '标题' v2");
-      assert.equal(row.ftitle, "Updated '标题' v2");
+      assert.equal(row.stitle, "Updated '标题' \"v2\"");
+      assert.equal(row.ftitle, "Updated '标题' \"v2\"");
       const storedBlob = Buffer.from(row.rhex, 'hex');
-      assert.ok(storedBlob.includes(Buffer.from("Updated '标题' v2", 'utf8')));
+      assert.ok(storedBlob.includes(Buffer.from("Updated '标题' \"v2\"", 'utf8')));
 
       // Now simulate an external agy /rename write directly into WAL while summaryCache is populated
       const populated = loadConversationSummaries(tmp, summaryCache);
-      assert.equal(populated.get(convId).title, "Updated '标题' v2");
+      assert.equal(populated.get(convId).title, "Updated '标题' \"v2\"");
       execFileSync(sqliteBin, [dbPath], {
         input: `PRAGMA wal_autocheckpoint=0; UPDATE conversation_summaries SET title = 'External Rename' WHERE conversation_id = '${convId}';\n`,
         encoding: 'utf8',
@@ -817,9 +827,9 @@ describe('multi-session panel & account-sync', () => {
       assert.equal(reloaded.get(convId).title, 'External Rename', 'WAL change must bust summaryCache even when .db mtime is unchanged');
 
       // Validation guards
-      assert.equal(renameConversationTitle('pid-1234', 'Nope', { rootDir: tmp }).ok, false);
-      assert.equal(renameConversationTitle(convId, '   ', { rootDir: tmp }).ok, false);
-      assert.equal(renameConversationTitle('missing-id-9999', 'Nope', { rootDir: tmp }).status, 404);
+      assert.equal((await renameConversationTitle('pid-1234', 'Nope', { rootDir: tmp, lsEndpoint: false })).ok, false);
+      assert.equal((await renameConversationTitle(convId, '   ', { rootDir: tmp, lsEndpoint: false })).ok, false);
+      assert.equal((await renameConversationTitle('missing-id-9999', 'Nope', { rootDir: tmp, lsEndpoint: false })).status, 404);
 
       // 4. HTTP endpoint + CSRF / LAN guards + HTML stays strictly English and script parses cleanly
       const html = renderPanelHtml();
@@ -832,6 +842,7 @@ describe('multi-session panel & account-sync', () => {
         rootDir: tmp,
         port: 0,
         lan: true,
+        lsEndpoint: false,
         dataOptions: {
           authOptions: { tokenReader: () => ({ accessToken: 'tok', email: 'u@example.com', sourceFormat: 'macos-keychain' }) },
           runningSessions: [],
@@ -894,10 +905,92 @@ describe('multi-session panel & account-sync', () => {
         });
         assert.equal(phoneRename.status, 200);
         assert.equal(JSON.parse(phoneRename.text).title, 'Phone Renamed');
+        assert.match(fs.readFileSync(annFile, 'utf8'), /^title:"Phone Renamed"  starred:true/);
       } finally {
         await panel.close();
       }
     } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+  test('text-format annotations helper only touches the top-level title field', () => {
+    assert.equal(setTextProtoStringField('', 'title', 'A'), 'title:"A"');
+    assert.equal(setTextProtoStringField('starred:true', 'title', 'B'), 'title:"B"  starred:true');
+    assert.equal(
+      setTextProtoStringField('pinned:true  title:"old \\"x\\""  tags:"title:\\"t\\"" sub { title:"inner" } # title:"c"', 'title', 'N\\ew "q" 标题'),
+      'pinned:true  title:"N\\\\ew \\"q\\" 标题"  tags:"title:\\"t\\"" sub { title:"inner" } # title:"c"'
+    );
+    assert.equal(setTextProtoStringField('title: "a" "b"  starred:false', 'title', 'C'), 'title:"C"  starred:false');
+  });
+
+  test('rename prefers the agy UpdateConversation API and falls back to the annotations file', async () => {
+    const { execFileSync } = require('node:child_process');
+    const http = require('node:http');
+    const sqliteBin = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-check-rename-api-'));
+    const convId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const dbPath = path.join(tmp, 'conversation_summaries.db');
+    const annFile = path.join(tmp, 'annotations', `${convId}.pbtxt`);
+    execFileSync(sqliteBin, [dbPath], {
+      input: [
+        'PRAGMA journal_mode=WAL;',
+        'CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text NOT NULL DEFAULT "", preview text NOT NULL DEFAULT "", step_count integer NOT NULL DEFAULT 0, last_modified_time datetime NOT NULL, workspace_uris text NOT NULL, raw_summary BLOB);',
+        `INSERT INTO conversation_summaries VALUES ('${convId}', 'Old', '', 3, '2026-11-24T12:00:00Z', '[]', NULL);`,
+      ].join('\n') + '\n',
+      encoding: 'utf8',
+    });
+    const dbTitle = () => execFileSync(sqliteBin, ['-cmd', 'PRAGMA query_only = ON;', dbPath, `SELECT title FROM conversation_summaries WHERE conversation_id='${convId}';`], { encoding: 'utf8' }).trim();
+
+    const calls = [];
+    const ls = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        calls.push({ path: req.url, csrf: req.headers['x-antigravity-csrf-token'], proto: req.headers['connect-protocol-version'], body });
+        // Behave like agy: persist to annotations, then rewrite the summary index from it.
+        fs.mkdirSync(path.dirname(annFile), { recursive: true });
+        fs.writeFileSync(annFile, `title:"${body.annotations.title}"`);
+        execFileSync(sqliteBin, [dbPath], { input: `UPDATE conversation_summaries SET title='${body.annotations.title}' WHERE conversation_id='${convId}';\n`, encoding: 'utf8' });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: body.conversationId, annotations: { title: body.annotations.title } }));
+      });
+    });
+    await new Promise(r => ls.listen(0, '127.0.0.1', r));
+    const lsPort = ls.address().port;
+    try {
+      assert.equal(resolveLsEndpoint({ ANTIGRAVITY_LS_ADDRESS: 'evil.example:80', ANTIGRAVITY_CSRF_TOKEN: 't' }), null);
+      assert.equal(resolveLsEndpoint({ ANTIGRAVITY_LS_ADDRESS: 'localhost:1234' }), null);
+      assert.deepEqual(resolveLsEndpoint({ ANTIGRAVITY_LS_ADDRESS: 'localhost:1234', ANTIGRAVITY_CSRF_TOKEN: 't' }), { host: 'localhost', port: 1234, csrfToken: 't' });
+
+      const endpoint = { host: '127.0.0.1', port: lsPort, csrfToken: 'secret-csrf' };
+      const viaApi = await renameConversationTitle(convId, 'Via API', { rootDir: tmp, lsEndpoint: endpoint });
+      assert.equal(viaApi.ok, true);
+      assert.equal(viaApi.via, 'agy-api');
+      assert.equal(viaApi.indexSynced, true);
+      assert.equal(JSON.stringify(viaApi).includes('secret-csrf'), false, 'CSRF token never leaks into results');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].path, '/product.v1.ConversationService/UpdateConversation');
+      assert.equal(calls[0].csrf, 'secret-csrf');
+      assert.equal(calls[0].proto, '1');
+      assert.deepEqual(calls[0].body, { conversationId: convId, annotations: { title: 'Via API' } });
+      assert.equal(dbTitle(), 'Via API');
+
+      // Stale/unreachable endpoint: fall back to the annotations file, still persisted for agy.
+      await new Promise(r => ls.close(r));
+      const fallback = await renameConversationTitle(convId, 'Via File', { rootDir: tmp, lsEndpoint: endpoint, lsTimeoutMs: 500 });
+      assert.equal(fallback.ok, true);
+      assert.equal(fallback.via, 'annotations-file');
+      assert.ok(fallback.apiError);
+      assert.equal(fs.readFileSync(annFile, 'utf8'), 'title:"Via File"');
+      assert.equal(dbTitle(), 'Via File');
+
+      // Simulate agy regenerating the summary index from annotations: the title must survive.
+      const annTitle = /title:"([^"]*)"/.exec(fs.readFileSync(annFile, 'utf8'))[1];
+      execFileSync(sqliteBin, [dbPath], { input: `UPDATE conversation_summaries SET title='${annTitle}' WHERE conversation_id='${convId}';\n`, encoding: 'utf8' });
+      assert.equal(dbTitle(), 'Via File');
+    } finally {
+      if (ls.listening) await new Promise(r => ls.close(r));
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });

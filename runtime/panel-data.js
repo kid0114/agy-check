@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const { execFileSync } = require('child_process');
 const { resolveAntigravityPath, resolveSafeExecutable } = require('./paths.js');
 const { calculateTokenCost } = require('./cost.js');
@@ -554,12 +555,248 @@ function sanitizeConversationTitle(rawTitle) {
     .trim();
 }
 
+function skipTextProtoString(text, i) {
+  const quote = text[i];
+  let j = i + 1;
+  while (j < text.length) {
+    const ch = text[j];
+    if (ch === '\\') { j += 2; continue; }
+    if (ch === quote) return j + 1;
+    if (ch === '\n') return j;
+    j++;
+  }
+  return j;
+}
+
 /**
- * Permanently renames a conversation inside agy's `conversation_summaries.db`
- * (updating `title`, `raw_summary` protobuf fields 1 and 15.1, and
- * `conversations_fts` chunk -1 if present) inside an atomic WAL-safe transaction.
+ * Finds the span of a top-level string field (`name: "..."`, including any
+ * adjacent concatenated literals) in a protobuf text-format document.
+ * Ignores matches inside nested messages, strings, and comments.
  */
-function renameConversationTitle(conversationId, newTitle, options = {}) {
+function findTopLevelTextProtoStringField(text, fieldName) {
+  const n = text.length;
+  let i = 0;
+  let depth = 0;
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '#') {
+      while (i < n && text[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { i = skipTextProtoString(text, i); continue; }
+    if (ch === '{' || ch === '<') { depth++; i++; continue; }
+    if (ch === '}' || ch === '>') { depth = Math.max(0, depth - 1); i++; continue; }
+    if (/[0-9]/.test(ch)) {
+      while (i < n && /[0-9A-Za-z_.+-]/.test(text[i])) i++;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(ch)) {
+      let j = i;
+      while (j < n && /[A-Za-z0-9_]/.test(text[j])) j++;
+      if (depth === 0 && text.slice(i, j) === fieldName) {
+        let k = j;
+        while (k < n && /\s/.test(text[k])) k++;
+        if (text[k] === ':') {
+          k++;
+          while (k < n && /\s/.test(text[k])) k++;
+          if (text[k] === '"' || text[k] === "'") {
+            let end = skipTextProtoString(text, k);
+            for (;;) {
+              let p = end;
+              while (p < n && /\s/.test(text[p])) p++;
+              if (text[p] === '"' || text[p] === "'") end = skipTextProtoString(text, p);
+              else break;
+            }
+            return { start: i, end };
+          }
+        }
+      }
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
+function escapeTextProtoString(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Sets a top-level string field in a protobuf text-format document while
+ * preserving every other field byte-for-byte (agy stores conversation
+ * annotations such as `title`, `starred`, `pinned` and `tags` this way).
+ */
+function setTextProtoStringField(text, fieldName, value) {
+  const src = typeof text === 'string' ? text : '';
+  const literal = `${fieldName}:"${escapeTextProtoString(value)}"`;
+  const span = findTopLevelTextProtoStringField(src, fieldName);
+  if (span) return src.slice(0, span.start) + literal + src.slice(span.end);
+  const rest = src.trim();
+  return rest ? `${literal}  ${rest}` : literal;
+}
+
+/**
+ * Writes the conversation title into agy's source of truth for user-editable
+ * metadata: `annotations/<id>.pbtxt`. agy's language server re-reads this file
+ * and regenerates `conversation_summaries.db` from it, so a title written only
+ * to the SQLite index is reverted on the next summary rewrite.
+ */
+function writeAnnotationsTitle(baseDir, conversationId, title) {
+  const dir = path.join(baseDir, 'annotations');
+  const file = path.join(dir, `${conversationId}.pbtxt`);
+  let previous = '';
+  let mode = 0o644;
+  let existed = false;
+  try {
+    previous = fs.readFileSync(file, 'utf8');
+    mode = fs.statSync(file).mode & 0o777;
+    existed = true;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const next = setTextProtoStringField(previous, 'title', title);
+  if (existed && next === previous) return { file, changed: false };
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.agy-check-${conversationId}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmp, next, { mode });
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+  return { file, changed: true };
+}
+
+/**
+ * Returns the agy language-server endpoint handed to this process by agy
+ * (`ANTIGRAVITY_LS_ADDRESS` + `ANTIGRAVITY_CSRF_TOKEN`), restricted to loopback.
+ * The token is only ever used server-side and never sent to browsers.
+ */
+function resolveLsEndpoint(env = process.env) {
+  const address = String(env.ANTIGRAVITY_LS_ADDRESS || '').trim();
+  const csrfToken = String(env.ANTIGRAVITY_CSRF_TOKEN || '').trim();
+  if (!address || !csrfToken) return null;
+  const m = /^(localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})$/.exec(address);
+  if (!m) return null;
+  const port = Number(m[2]);
+  if (!port || port > 65535) return null;
+  return { host: m[1].replace(/^\[|\]$/g, ''), port, csrfToken };
+}
+
+/**
+ * Calls the documented `ConversationService/UpdateConversation` API on agy's
+ * local language server. Resolves `{ ok, status?, error? }`; never rejects and
+ * never includes the CSRF token in its result.
+ */
+function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    const body = JSON.stringify({ conversationId, annotations: { title } });
+    let req;
+    try {
+      req = http.request({
+        host: endpoint.host,
+        port: endpoint.port,
+        method: 'POST',
+        path: '/product.v1.ConversationService/UpdateConversation',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connect-Protocol-Version': '1',
+          'x-antigravity-csrf-token': endpoint.csrfToken,
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: timeoutMs,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          if (res.statusCode !== 200) {
+            done({ ok: false, status: res.statusCode, error: `agy API HTTP ${res.statusCode}` });
+            return;
+          }
+          let parsed = null;
+          try { parsed = JSON.parse(text); } catch {}
+          const conv = parsed && (parsed.conversation || parsed);
+          const got = conv && conv.annotations ? conv.annotations.title : undefined;
+          if (got === title) done({ ok: true, status: 200 });
+          else done({ ok: false, status: 200, error: 'agy API did not confirm the new title' });
+        });
+        res.on('error', (err) => done({ ok: false, error: err.code || err.message }));
+      });
+    } catch (err) {
+      done({ ok: false, error: err.code || err.message });
+      return;
+    }
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.on('error', (err) => done({ ok: false, error: err.code || err.message }));
+    req.end(body);
+  });
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function readSummaryRow(sqliteBin, dbPath, idExpr) {
+  const rows = querySqliteJson(
+    sqliteBin,
+    dbPath,
+    `SELECT conversation_id, title, hex(raw_summary) AS raw_hex, ` +
+    `(SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conversations_fts') AS has_fts ` +
+    `FROM conversation_summaries WHERE conversation_id = ${idExpr};`,
+    3000
+  );
+  return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+}
+
+function writeSummaryIndexTitle(sqliteBin, dbPath, row, idExpr, cleanTitle) {
+  const titleExpr = sqlHexText(cleanTitle);
+  let updatedBlobHex = null;
+  if (typeof row.raw_hex === 'string' && row.raw_hex.length > 0) {
+    const updatedBuf = updateSummaryBlobTitle(Buffer.from(row.raw_hex, 'hex'), cleanTitle);
+    if (updatedBuf) updatedBlobHex = updatedBuf.toString('hex');
+  }
+  const stmts = [
+    'PRAGMA busy_timeout = 5000;',
+    'BEGIN IMMEDIATE;',
+    updatedBlobHex
+      ? `UPDATE conversation_summaries SET title = ${titleExpr}, raw_summary = X'${updatedBlobHex}' WHERE conversation_id = ${idExpr};`
+      : `UPDATE conversation_summaries SET title = ${titleExpr} WHERE conversation_id = ${idExpr};`,
+  ];
+  if (Number(row.has_fts) > 0) {
+    stmts.push(`UPDATE conversations_fts SET title = ${titleExpr} WHERE conversation_id = ${idExpr} AND chunk_index = -1;`);
+  }
+  stmts.push('COMMIT;');
+  execFileSync(sqliteBin, ['-bail', dbPath], {
+    input: stmts.join('\n') + '\n',
+    encoding: 'utf8',
+    timeout: 6000,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+/**
+ * Permanently renames a conversation so agy itself keeps the new title.
+ *
+ * 1. Source of truth: agy's documented `UpdateConversation` API when a live
+ *    loopback endpoint is available (`options.lsEndpoint`, default from env;
+ *    pass `false` to disable), otherwise `annotations/<id>.pbtxt`.
+ * 2. Display index: `conversation_summaries.db` (`title`, `raw_summary`
+ *    protobuf fields 1 and 15.1, `conversations_fts` chunk -1) so the panel
+ *    reflects the change immediately. When the API path is used, agy rewrites
+ *    the index itself; we only write it if agy has not done so shortly after.
+ *
+ * Resolves `{ ok, conversationId, title, previousTitle, via, indexSynced, warning? }`.
+ */
+async function renameConversationTitle(conversationId, newTitle, options = {}) {
   const { rootDir = null, summaryCache = null } = options;
   const id = String(conversationId || '').trim();
   if (!id || id.startsWith('pid-') || !/^[a-zA-Z0-9._-]{4,128}$/.test(id)) {
@@ -586,65 +823,59 @@ function renameConversationTitle(conversationId, newTitle, options = {}) {
   }
 
   const idExpr = sqlHexText(id);
-  const titleExpr = sqlHexText(cleanTitle);
-
   let row = null;
-  let hasFtsTable = false;
   try {
-    const rows = querySqliteJson(
-      sqliteBin,
-      dbPath,
-      `SELECT conversation_id, title, hex(raw_summary) AS raw_hex, ` +
-      `(SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conversations_fts') AS has_fts ` +
-      `FROM conversation_summaries WHERE conversation_id = ${idExpr};`,
-      3000
-    );
-    if (Array.isArray(rows) && rows.length > 0) {
-      row = rows[0];
-      hasFtsTable = Number(row.has_fts) > 0;
-    }
+    row = readSummaryRow(sqliteBin, dbPath, idExpr);
   } catch (err) {
     return { ok: false, status: 500, error: `Failed to read conversation_summaries.db: ${err.message}` };
   }
-
   if (!row) {
     return { ok: false, status: 404, error: 'Conversation not found in conversation_summaries.db' };
   }
+  const previousTitle = typeof row.title === 'string' ? row.title : '';
 
-  let updatedBlobHex = null;
-  if (typeof row.raw_hex === 'string' && row.raw_hex.length > 0) {
+  // 1. Persist to agy's source of truth.
+  let via = null;
+  let apiError = null;
+  const endpoint = options.lsEndpoint === undefined ? resolveLsEndpoint() : options.lsEndpoint;
+  if (endpoint && typeof endpoint === 'object') {
+    const apiResult = await callLsUpdateConversationTitle(endpoint, id, cleanTitle, options.lsTimeoutMs || 2500);
+    if (apiResult.ok) via = 'agy-api';
+    else apiError = apiResult.error || 'agy API call failed';
+  }
+  if (!via) {
     try {
-      const updatedBuf = updateSummaryBlobTitle(Buffer.from(row.raw_hex, 'hex'), cleanTitle);
-      if (updatedBuf) updatedBlobHex = updatedBuf.toString('hex');
+      writeAnnotationsTitle(baseDir, id, cleanTitle);
+      via = 'annotations-file';
     } catch (err) {
-      return { ok: false, status: 500, error: `Failed to update raw_summary protobuf: ${err.message}` };
+      const reason = apiError ? `${apiError}; ` : '';
+      return { ok: false, status: 500, error: `Failed to save title to agy (${reason}annotations: ${err.message})` };
     }
   }
 
-  const stmts = [
-    'PRAGMA busy_timeout = 5000;',
-    'BEGIN IMMEDIATE;',
-    updatedBlobHex
-      ? `UPDATE conversation_summaries SET title = ${titleExpr}, raw_summary = X'${updatedBlobHex}' WHERE conversation_id = ${idExpr};`
-      : `UPDATE conversation_summaries SET title = ${titleExpr} WHERE conversation_id = ${idExpr};`,
-  ];
-  if (hasFtsTable) {
-    stmts.push(
-      `UPDATE conversations_fts SET title = ${titleExpr} WHERE conversation_id = ${idExpr} AND chunk_index = -1;`
-    );
-  }
-  stmts.push('COMMIT;');
-
+  // 2. Keep the panel's display index in step.
+  let indexSynced = false;
+  let warning = null;
   try {
-    execFileSync(sqliteBin, ['-bail', dbPath], {
-      input: stmts.join('\n') + '\n',
-      encoding: 'utf8',
-      timeout: 6000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    if (via === 'agy-api') {
+      const waitMs = options.indexWaitMs === undefined ? 1500 : options.indexWaitMs;
+      const deadline = Date.now() + waitMs;
+      for (;;) {
+        row = readSummaryRow(sqliteBin, dbPath, idExpr) || row;
+        if (row && row.title === cleanTitle) { indexSynced = true; break; }
+        if (Date.now() >= deadline) break;
+        await sleepMs(150);
+      }
+    } else {
+      row = readSummaryRow(sqliteBin, dbPath, idExpr) || row;
+    }
+    if (!indexSynced) {
+      writeSummaryIndexTitle(sqliteBin, dbPath, row, idExpr, cleanTitle);
+      indexSynced = true;
+    }
   } catch (err) {
-    const detail = err.stderr ? String(err.stderr).trim() : err.message;
-    return { ok: false, status: 500, error: `Failed to write conversation_summaries.db: ${detail}` };
+    const detail = err && err.stderr ? String(err.stderr).trim() : (err && err.message) || String(err);
+    warning = `Saved to agy, but the panel index was not updated yet (${detail}); it refreshes on agy's next update.`;
   }
 
   if (summaryCache && typeof summaryCache === 'object') {
@@ -653,12 +884,17 @@ function renameConversationTitle(conversationId, newTitle, options = {}) {
     delete summaryCache.map;
   }
 
-  return {
+  const result = {
     ok: true,
     conversationId: id,
     title: cleanTitle,
-    previousTitle: typeof row.title === 'string' ? row.title : '',
+    previousTitle,
+    via,
+    indexSynced,
   };
+  if (apiError) result.apiError = apiError;
+  if (warning) result.warning = warning;
+  return result;
 }
 
 /**
@@ -1649,6 +1885,9 @@ module.exports = {
   parseTranscriptMetrics,
   getSqliteCacheStamp,
   updateSummaryBlobTitle,
+  setTextProtoStringField,
+  writeAnnotationsTitle,
+  resolveLsEndpoint,
   renameConversationTitle,
   loadConversationSummaries,
   readAllHookTimings,

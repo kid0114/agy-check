@@ -1414,6 +1414,11 @@ function renderPanelHtml() {
       el.className = 'rename-note' + (tone ? ' ' + tone : '');
     }
 
+    function showRenameNotice(id) {
+      const n = state.renameNotice;
+      if (n && n.id === id && Date.now() < n.until) setRenameNote(n.text, n.tone);
+    }
+
     function cancelRename() {
       state.renamingId = null;
       $('renameForm').hidden = true;
@@ -1434,11 +1439,7 @@ function renderPanelHtml() {
       $('btnRenameSave').disabled = false;
       $('btnRenameCancel').disabled = false;
       $('renameInput').value = d.title || '';
-      if (d.isRunning || d.isGenerating) {
-        setRenameNote('Active agy session: an open window may overwrite this on its next turn.', 'warn');
-      } else {
-        setRenameNote('', '');
-      }
+      setRenameNote('', '');
       $('renameInput').focus();
       $('renameInput').select();
     }
@@ -1483,6 +1484,13 @@ function renderPanelHtml() {
         d.title = out.title;
         $('detailTitle').textContent = out.title;
         cancelRename();
+        state.renameNotice = {
+          id: d.conversationId,
+          text: out.warning || (out.via === 'agy-api' ? 'Saved and synced to agy (agy API).' : 'Saved and synced to agy (annotations file).'),
+          tone: out.warning ? 'warn' : '',
+          until: Date.now() + (out.warning ? 15000 : 6000),
+        };
+        showRenameNotice(d.conversationId);
         await fetchOverview();
       } catch {
         $('renameInput').disabled = false;
@@ -1505,6 +1513,7 @@ function renderPanelHtml() {
       $('btnRenameTitle').hidden = !editable;
       if (!isEditingThis) {
         cancelRename();
+        showRenameNotice(d.conversationId);
       }
 
       const sp = speedParts(d.speed);
