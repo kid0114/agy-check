@@ -94,6 +94,8 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 
 ![Session detail](./assets/panel-session-detail.png)
 
+![Filter, select all, and bulk archive or delete](./assets/panel-bulk-ops.png)
+
 The page stays in sync through Server-Sent Events whenever an `agy` transcript, `conversation_summaries.db` (including WAL updates from `/rename`), `annotations/`, `conversations/`, or `presence/` changes, so numbers, titles and running status update within about a second. A 20-second heartbeat detects silently stalled connections (such as a phone or laptop waking from sleep), refetches on reconnect or tab focus, and falls back to 5-second polling while reconnecting; clicking the **Live** pill forces an immediate sync. While at least one dashboard tab is open, cloud quota refreshes quietly in the background every 3 minutes. If the panel restarts with a newer interface, a dismissible notice invites you to refresh manually rather than reloading the page unexpectedly. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order, empty/archived filters and cost toggle are remembered in the browser (`Select` mode always starts off).
 
 ### On your phone

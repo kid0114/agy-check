@@ -94,6 +94,8 @@ node scripts/bootstrap.js
 
 ![会话详情](./assets/panel-session-detail.png)
 
+![搜索筛选、全选与批量归档或删除](./assets/panel-bulk-ops.png)
+
 页面通过 Server-Sent Events 自动保持同步：任何 `agy` 会话日志、`conversation_summaries.db`（含 `/rename` 的 WAL 写入）、`annotations/`、`conversations/` 或 `presence/` 有变化，大约一秒内数字、标题和运行状态就会更新。每 20 秒的 SSE 心跳会自动发现休眠/切后台导致的假死连接，重连或切回标签页时立刻补拉数据，断连期间降级为 5 秒轮询；点击顶部的 **Live** 指示灯也可随时手动触发同步。有页面打开时，云端配额每 3 分钟在后台静默刷新一次。面板升级重启后，页面只弹出可关闭的提示让你按需手动刷新，不会擅自整页重载。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序、空会话/归档筛选与费用开关会保存在浏览器里（`Select` 模式默认关闭）。
 
 ### 在手机上查看
