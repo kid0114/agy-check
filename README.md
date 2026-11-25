@@ -2,25 +2,33 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-A real-time status line and a multi-session dashboard for the Antigravity CLI (`agy`). It shows cache hit rate, output speed, tool time, context use, remaining quota and estimated cost, either for the session you are in or for every session at once.
+**Monitor and manage every Antigravity CLI (`agy`) session across all your devices — locally, over LAN/VPN, or on a remote server.** Check cache hit rate, output speed, tool time, context use, remaining quota, and estimated cost from your terminal status line, desktop browser, laptop, tablet, or phone, all synced live. Rename, archive, or bulk-delete sessions from whichever screen is in front of you.
 
 [中文文档](./README_zh.md)
 
-![agy-check dashboard](./assets/panel-overview.png)
+![agy-check desktop dashboard](./assets/panel-overview.png)
 
-<sub>All screenshots use synthetic demo data.</sub>
+<p align="center">
+  <img src="./assets/phone-overview.png" alt="Overview on a phone" width="230">
+  <img src="./assets/phone-sessions.png" alt="Session cards on a phone" width="230">
+  <img src="./assets/phone-detail.png" alt="Session detail on a phone" width="230">
+</p>
+
+<sub>Desktop, laptop, tablet and phone views stay synced live via Server-Sent Events. All screenshots use synthetic demo data.</sub>
 
 ---
 
-## What you get
+## Multi-device & server access at a glance
 
-| Part | Where | What it shows |
+| Setup / Surface | How to open | What you can do |
 |---|---|---|
-| **Status line** | Bottom of every `agy` session | Output speed (`out` / `net≈`), tool time, per-turn and session cache hit rate, context window, 5-hour and weekly quota |
-| **Dashboard** | `/check` inside `agy`, or `agy-check panel` | Every session in one live page: cache efficiency, speed, tokens, quota per account, estimated cost per time range, and why individual turns missed the cache |
-| **CLI** | `agy-check ls` / `session` / `sync` | The same data as plain-text tables |
+| **Phone & Tablet (LAN / VPN)** | `/check lan` → 6-digit pairing code | Watch live sessions, quota, speed and costs from iOS/Android (supports Add to Home Screen & 30-day sign-in); rename, archive, or bulk-delete sessions away from your desk |
+| **Remote / Headless Server → Multi-Device** | `agy-check panel --daemon --lan --networks <cidr>` or SSH tunnel | Run `agy` on a remote workstation, homelab, or cloud VM and view/manage every session live from your laptop, tablet, and phone over WireGuard/Tailscale/LAN or SSH |
+| **Desktop WebUI** | `/check` inside `agy`, or `agy-check panel` | Full multi-session dashboard: per-account quota, cost by time range, per-turn cache-miss diagnosis, search + Select All bulk archive/delete, and Keychain account sync |
+| **Terminal Status Line** | Bottom of every `agy` session | Live output speed (`out` / `net≈`), tool time, per-turn & session cache hit rate, context window, 5-hour and weekly quota |
+| **CLI & Slash Commands** | `/check ls`, `agy-check ls` / `session` / `sync` | Zero-token slash commands inside `agy` and plain-text terminal tables |
 
-Everything runs locally from files `agy` already writes. There are no runtime dependencies and no telemetry, and the dashboard only listens on `127.0.0.1`.
+Everything runs directly on the machine running `agy` from files `agy` already writes — no cloud relay, no runtime dependencies, no telemetry. The dashboard binds to `127.0.0.1` by default, and `/check lan` (or `--lan --networks <cidr>`) enables authenticated multi-device viewing across your trusted LAN or VPN overlay whenever you need it.
 
 ---
 
@@ -80,7 +88,7 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 | `/check session [id]` | Per-turn cache detail for one session (defaults to the current one) |
 | `/check refresh` | Refresh quota, then print the session table |
 | `/check sync [--apply]` | Preview the account sync, or run it with `--apply` |
-| `/check lan [--networks <cidr,...>\|none] [--revoke]` | Let phones on the same network use the dashboard: prints the address and a pairing code (see below) |
+| `/check lan [--networks <cidr,...>\|none] [--revoke]` | Enable multi-device LAN/VPN access (phones, tablets, laptops, or remote servers): prints addresses and a 6-digit pairing code (see below) |
 | `/check stop` | Stop the background dashboard |
 
 ### What's on the page
@@ -98,35 +106,50 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 
 The page stays in sync through Server-Sent Events whenever an `agy` transcript, `conversation_summaries.db` (including WAL updates from `/rename`), `annotations/`, `conversations/`, or `presence/` changes, so numbers, titles and running status update within about a second. A 20-second heartbeat detects silently stalled connections (such as a phone or laptop waking from sleep), refetches on reconnect or tab focus, and falls back to 5-second polling while reconnecting; clicking the **Live** pill forces an immediate sync. While at least one dashboard tab is open, cloud quota refreshes quietly in the background every 3 minutes. If the panel restarts with a newer interface, a dismissible notice invites you to refresh manually rather than reloading the page unexpectedly. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order, empty/archived filters and cost toggle are remembered in the browser (`Select` mode always starts off).
 
-### On your phone
+### Multi-device and remote server access
 
-The dashboard normally answers only this computer. To open it on a phone on the same network, type in `agy`:
+Open the same live dashboard from a phone, tablet, or second computer — either on your local Wi-Fi/Ethernet or against a remote/headless server running `agy` — with no cloud account or third-party tunnel required.
 
-```text
-/check lan
-```
+#### 1. Same LAN (Wi-Fi / Ethernet)
 
-This switches the dashboard into phone mode and prints the address to open, such as `http://192.168.1.20:18721/`, plus a 6-digit pairing code.
+Inside `agy`, type `/check lan` (or run `agy-check panel --daemon --lan` in a shell). This switches the dashboard into multi-device mode and prints the addresses to open (such as `http://192.168.1.20:18721/`) plus a 6-digit pairing code:
 
-1. Open the address on the phone. Until the phone is paired, the page only asks for the code.
+1. Open the address on your phone, tablet, or another computer. Until the device is paired, the page only asks for the code.
 2. Enter the code. It is valid for 10 minutes, works once, and is cancelled after five wrong tries.
-3. The phone then stays signed in for 30 days; after that it shows the pairing page again. It can also be added to the home screen. A home-screen app keeps its own sign-in, so pair it once from there.
+3. The device then stays signed in for 30 days; after that it shows the pairing page again. It can also be added to the home screen (PWA). A home-screen app keeps its own sign-in, so pair it once from there.
 
-On the computer, the **Phone** button in the top bar shows the addresses and a fresh code, the number of signed-in phones, and **Sign out all phones**. On phones, sessions show as responsive cards (respecting **Show cost** and hiding checkboxes until **Select** is toggled), the detail panel fills the screen with a dedicated **Archive / Delete / Copy** action bar below the title, and confirmation dialogs track `visualViewport` so inputs stay above the iOS keyboard.
+#### 2. Remote / headless server (VPN overlay or SSH tunnel)
+
+If you run `agy` on a remote workstation, homelab server, or cloud VM, you can view and manage its sessions across your laptop, tablet, and phone in two safe ways:
+
+- **Over a VPN overlay (WireGuard / Tailscale / ZeroTier) or custom server subnet** — save the allowed CIDR once and pair any number of devices with a 6-digit code (no SSH client needed on phones):
+  ```bash
+  # On the server (example: WireGuard subnet or Tailscale 100.64.0.0/10; comma-separated for multiple)
+  agy-check panel --daemon --lan --networks 10.0.0.0/24
+  # Or inside agy:
+  /check lan --networks 10.0.0.0/24
+  ```
+  On Linux servers whose Ethernet NIC uses predictable names (such as `ens*` or `enp*` instead of `eth*`), adding the server's LAN CIDR via `--networks` enables that interface too.
+- **Over an SSH tunnel (keeps the server bound to `127.0.0.1` only)** — no `--lan` mode or pairing code needed for laptop access:
+  ```bash
+  # On the server:
+  agy-check panel --daemon
+  # On your laptop:
+  ssh -L 18721:127.0.0.1:18721 user@your-server
+  ```
+  Then open `http://127.0.0.1:18721` locally.
+
+On the host machine, the **Phone** button in the top bar shows reachable addresses and a fresh pairing code, the number of signed-in devices, and **Sign out all phones** (or run `agy-check panel pair` / `agy-check panel revoke` over SSH on a headless server). On phones, sessions show as responsive cards (respecting **Show cost** and hiding checkboxes until **Select** is toggled), the detail panel fills the screen with a dedicated **Archive / Delete / Copy** action bar below the title, and confirmation dialogs track `visualViewport` so inputs stay above the iOS keyboard.
 
 <p align="center">
-  <img src="./assets/phone-pair.png" alt="Pairing page" width="200">
-  <img src="./assets/phone-overview.png" alt="Overview on a phone" width="200">
-  <img src="./assets/phone-sessions.png" alt="Session cards" width="200">
-  <img src="./assets/phone-detail.png" alt="Session detail on a phone" width="200">
+  <img src="./assets/phone-pair.png" alt="One-time pairing screen on a phone" width="240">
 </p>
 
-- Only Wi-Fi and Ethernet addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered.
-- To also reach it over your own network, such as a VPN overlay, save that network once: `/check lan --networks 10.0.0.0/24` (separate several with commas; `none` clears them).
-- Paired phones can view everything, refresh quota, rename, archive and delete sessions. Account sync, pairing codes and sign-out work only on the computer running `agy`.
-- The phone's sign-in is a random cookie; only its hash is stored, together with saved networks, in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json` (readable only by you), so phones stay signed in across restarts. `/check lan --revoke` signs out every phone.
-- `/check stop` turns the dashboard off; the next plain `/check` starts it for this computer only, and `/check lan` turns phone mode back on with existing phones still signed in.
-- Traffic is plain HTTP inside your network. Use it only on networks you trust and do not forward the port to the internet.
+- Only physical Wi-Fi/Ethernet (`en*`, `eth*`, `wlan*`, `wl*`) addresses are served by default. VM bridges and VPN tunnels are neither listed nor answered unless their CIDR is saved via `--networks <cidr,...>` (`none` clears saved networks).
+- Paired devices can view everything, refresh quota, rename, archive and delete sessions. Account sync, pairing codes and sign-out work only on the host running `agy`.
+- Each paired device gets a random HttpOnly cookie; only its SHA-256 hash is stored, together with saved networks, in `~/.gemini/antigravity-cli/agy-hud-panel-lan.json` (mode `0600`, readable only by you), so devices stay signed in across restarts. `/check lan --revoke` or `agy-check panel revoke` signs out every paired device.
+- `/check stop` turns the dashboard off; the next plain `/check` starts it for `127.0.0.1` only, and `/check lan` turns multi-device mode back on with existing paired devices still signed in.
+- Traffic is plain HTTP. Use `--lan` only inside a trusted LAN or encrypted VPN overlay (WireGuard/Tailscale/ZeroTier), or use an SSH tunnel — never forward port `18721` to the public internet.
 
 ### Why a turn missed the cache
 
@@ -172,8 +195,8 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   Start the dashboard (127.0.0.1)
-   [--lan] [--networks <cidr,...>|none]              Phone mode: Wi-Fi/Ethernet plus saved networks, pairing code
-agy-check panel pair | revoke                        New pairing code | sign out all paired phones
+   [--lan] [--networks <cidr,...>|none]              Multi-device mode: LAN + saved VPN/server CIDRs with pairing code
+agy-check panel pair | revoke                        New pairing code | sign out all paired devices
 agy-check panel handoff                              Hand this agy window's loopback API connection to the panel (for permanent delete)
 agy-check panel stop                                 Stop the background dashboard
 agy-check ls [--range 24h] [--sort recent]           Print the session table
@@ -329,7 +352,7 @@ agy-check only reads local files that `agy` and its own hooks write:
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
 - The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
 
-The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename, archive, delete and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. Renames, archives and deletes may also call `agy`'s own language server on a loopback address. There is no telemetry.
+The dashboard binds to `127.0.0.1` only, unless you turn on multi-device access with `/check lan` (see [Multi-device and remote server access](#multi-device-and-remote-server-access)). Its write actions (quota refresh, session rename, archive, delete and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. Renames, archives and deletes may also call `agy`'s own language server on a loopback address. There is no telemetry.
 
 ---
 

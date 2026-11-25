@@ -2,25 +2,33 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-为 Antigravity CLI（`agy`）提供实时状态栏和多会话面板：缓存命中率、输出速度、工具耗时、上下文占用、剩余配额和估算费用，既能看当前会话，也能一次看全部会话。
+**跨多端实时查看与管理所有 Antigravity CLI（`agy`）会话——支持本机、局域网、VPN 组网，以及远程服务器部署。** 无论在终端状态栏、电脑浏览器、笔记本、平板还是手机上，都能实时同步查看缓存命中率、输出速度、工具耗时、上下文占用、剩余配额与估算费用，并随时重命名、归档或批量清理会话。
 
 [English](./README.md)
 
-![agy-check 面板](./assets/panel-overview.png)
+![agy-check 电脑端面板](./assets/panel-overview.png)
 
-<sub>所有截图均为虚构的演示数据。</sub>
+<p align="center">
+  <img src="./assets/phone-overview.png" alt="手机端总览" width="230">
+  <img src="./assets/phone-sessions.png" alt="手机端会话卡片" width="230">
+  <img src="./assets/phone-detail.png" alt="手机端会话详情" width="230">
+</p>
+
+<sub>电脑端、平板与手机端通过 Server-Sent Events 实时同步。所有截图均为虚构的演示数据。</sub>
 
 ---
 
-## 包含什么
+## 多端与服务器接入一览
 
-| 部分 | 在哪里 | 显示什么 |
+| 场景 / 使用端 | 打开方式 | 能做什么 |
 |---|---|---|
-| **状态栏** | 每个 `agy` 会话底部 | 输出速度（`out` / `net≈`）、工具耗时、单轮与整会话缓存命中率、上下文窗口、5 小时与每周配额 |
-| **面板** | 在 `agy` 内输入 `/check`，或运行 `agy-check panel` | 所有会话汇总在一个实时页面：缓存效率、速度、token、各账号配额、按时间范围的估算费用，以及每一轮未命中缓存的原因 |
-| **命令行** | `agy-check ls` / `session` / `sync` | 同样的数据，以纯文本表格输出 |
+| **手机 / 平板（局域网 / VPN）** | `/check lan` → 6 位配对码 | 在 iOS / Android 上实时盯会话进度、配额、速度与费用（支持添加到主屏幕与 30 天免重登）；离开电脑也能直接重命名、归档或批量删除会话 |
+| **远程 / 无头服务器 → 多端查看** | `agy-check panel --daemon --lan --networks <cidr>` 或 SSH 隧道 | 在远程工作站、HomeLab 或云服务器上跑 `agy`，通过 WireGuard / Tailscale / 局域网或 SSH 端口转发，在电脑、平板和手机上同时查看与管理所有会话 |
+| **电脑 WebUI 面板** | 在 `agy` 内输入 `/check`，或运行 `agy-check panel` | 全量多会话总览：各账号配额、按时间范围估算费用、逐轮缓存未命中诊断、搜索过滤 + 全选批量归档/删除，以及钥匙串账号同步 |
+| **终端状态栏（HUD）** | 每个 `agy` 会话底部 | 实时输出速度（`out` / `net≈`）、工具耗时、单轮与整会话缓存命中率、上下文窗口、5 小时与每周配额 |
+| **零 Token 斜杠命令 & CLI** | `/check ls`、`agy-check ls` / `session` / `sync` | 在 `agy` 内直接零 token 查看或以纯文本表格输出 |
 
-全部在本机运行，只读取 `agy` 本来就会写入的文件。没有运行时依赖，没有遥测，面板只监听 `127.0.0.1`。
+全部直接运行在跑 `agy` 的机器上，仅读取 `agy` 本来就会写入的文件——无需云端中转、零运行时依赖、无遥测。面板默认只监听 `127.0.0.1`，需要多端或服务器查看时，一条 `/check lan`（或 `--lan --networks <cidr>`）即可在可信局域网或 VPN 组网下安全开启（一次性 6 位配对码 + 30 天设备会话）。
 
 ---
 
@@ -80,7 +88,7 @@ node scripts/bootstrap.js
 | `/check session [id]` | 查看某个会话的逐轮缓存详情（默认当前会话） |
 | `/check refresh` | 刷新配额后输出会话表 |
 | `/check sync [--apply]` | 预览账号同步，加 `--apply` 则实际执行 |
-| `/check lan [--networks <cidr,...>\|none] [--revoke]` | 允许同一网络中的手机使用面板：输出访问地址和配对码（见下文） |
+| `/check lan [--networks <cidr,...>\|none] [--revoke]` | 开启多端局域网 / VPN 访问（手机、平板、另一台电脑或远程服务器）：输出访问地址和 6 位配对码（见下文） |
 | `/check stop` | 停止后台面板 |
 
 ### 页面内容
@@ -98,35 +106,50 @@ node scripts/bootstrap.js
 
 页面通过 Server-Sent Events 自动保持同步：任何 `agy` 会话日志、`conversation_summaries.db`（含 `/rename` 的 WAL 写入）、`annotations/`、`conversations/` 或 `presence/` 有变化，大约一秒内数字、标题和运行状态就会更新。每 20 秒的 SSE 心跳会自动发现休眠/切后台导致的假死连接，重连或切回标签页时立刻补拉数据，断连期间降级为 5 秒轮询；点击顶部的 **Live** 指示灯也可随时手动触发同步。有页面打开时，云端配额每 3 分钟在后台静默刷新一次。面板升级重启后，页面只弹出可关闭的提示让你按需手动刷新，不会擅自整页重载。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序、空会话/归档筛选与费用开关会保存在浏览器里（`Select` 模式默认关闭）。
 
-### 在手机上查看
+### 多端与服务器接入
 
-面板默认只响应本机。要在同一网络中的手机上打开，在 `agy` 中输入：
+无需云账号或第三方内网穿透，就能在手机、平板或另一台电脑上实时查看并管理同一个面板——既支持同一局域网，也支持远程 / 无头服务器部署。
 
-```text
-/check lan
-```
+#### 1. 同一局域网（Wi-Fi / 有线网）
 
-面板会切换到手机模式，并输出要打开的地址（例如 `http://192.168.1.20:18721/`）和一个 6 位配对码。
+在 `agy` 中输入 `/check lan`（或在终端运行 `agy-check panel --daemon --lan`）。面板会切换到多端访问模式，并输出访问地址（例如 `http://192.168.1.20:18721/`）和一个 6 位配对码：
 
-1. 在手机上打开该地址。完成配对之前，页面只会要求输入配对码。
+1. 在手机、平板或另一台电脑上打开该地址。完成配对之前，页面只会要求输入配对码。
 2. 输入配对码。配对码 10 分钟内有效、只能使用一次，连续输错 5 次即作废。
-3. 配对后手机保持登录 30 天，到期后会重新显示配对页面。也可以添加到主屏幕；主屏幕应用有独立的登录状态，需要在其中再配对一次。
+3. 配对后设备保持登录 30 天，到期后会重新显示配对页面。也可以添加到主屏幕（PWA）；主屏幕应用有独立的登录状态，需要在其中再配对一次。
 
-在电脑上，顶栏的 **Phone** 按钮会显示访问地址和新的配对码、当前已登录的手机数量，以及 **Sign out all phones**（让所有手机退出登录）。手机上会话以响应式卡片展示（支持 **Show cost** 切换，平时隐藏勾选框、点 **Select** 后才显示），详情面板占满全屏并在标题下方提供带文字标签的 **Archive / Delete / Copy** 操作栏，删除确认弹窗跟踪 `visualViewport` 避免被 iOS 软键盘遮挡。
+#### 2. 远程 / 无头服务器（VPN 组网或 SSH 隧道）
+
+如果你的 `agy` 跑在远程工作站、HomeLab 服务器或云主机上，可以通过以下两种安全方式在电脑、平板和手机上同时查看与操作：
+
+- **通过 VPN 组网（WireGuard / Tailscale / ZeroTier）或指定服务器网段**——保存一次允许的网段 CIDR，手机、平板和笔记本都能直接凭 6 位配对码接入（手机端无需装 SSH 客户端）：
+  ```bash
+  # 在服务器上运行（示例：WireGuard 网段或 Tailscale 的 100.64.0.0/10，多网段用逗号分隔）
+  agy-check panel --daemon --lan --networks 10.0.0.0/24
+  # 或在 agy 内运行：
+  /check lan --networks 10.0.0.0/24
+  ```
+  如果 Linux 服务器的物理网卡使用 `ens*` / `enp*` 等现代命名（而非 `eth*`），同样可以通过 `--networks` 放行服务器所在局域网段。
+- **通过 SSH 端口转发（服务器保持仅监听 `127.0.0.1`）**——电脑端查看无需开启 `--lan`，也不必配对：
+  ```bash
+  # 在服务器上：
+  agy-check panel --daemon
+  # 在本机电脑上：
+  ssh -L 18721:127.0.0.1:18721 user@your-server
+  ```
+  随后在本机浏览器打开 `http://127.0.0.1:18721`。
+
+在宿主机端，顶栏的 **Phone** 按钮会显示可用地址与新配对码、已登录设备数量，以及 **Sign out all phones**（无头服务器也可通过 SSH 执行 `agy-check panel pair` / `agy-check panel revoke`）。手机上会话以响应式卡片展示（支持 **Show cost** 切换，平时隐藏勾选框、点 **Select** 后才显示），详情面板占满全屏并在标题下方提供带文字标签的 **Archive / Delete / Copy** 操作栏，删除确认弹窗跟踪 `visualViewport` 避免被 iOS 软键盘遮挡。
 
 <p align="center">
-  <img src="./assets/phone-pair.png" alt="配对页面" width="200">
-  <img src="./assets/phone-overview.png" alt="手机上的总览" width="200">
-  <img src="./assets/phone-sessions.png" alt="会话卡片" width="200">
-  <img src="./assets/phone-detail.png" alt="手机上的会话详情" width="200">
+  <img src="./assets/phone-pair.png" alt="手机端一次性配对页面" width="240">
 </p>
 
-- 默认只对 Wi-Fi 和有线网卡的地址开放；虚拟机网桥和 VPN 隧道既不列出，也不响应。
-- 如果还想通过自己的网络访问（例如 VPN 组网），先保存一次该网段：`/check lan --networks 10.0.0.0/24`（多个网段用逗号分隔，`none` 清空）。
-- 已配对的手机可以查看全部内容、刷新配额，以及重命名、归档和删除会话；账号同步、配对码和退出登录只能在运行 `agy` 的电脑上操作。
-- 手机的登录凭据是一个随机 Cookie，只保存其哈希值，与已保存的网段一起存放在 `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`（仅本人可读），因此重启后手机仍保持登录。`/check lan --revoke` 让所有手机退出登录。
-- `/check stop` 关闭面板，之后普通的 `/check` 只对本机开放；再次 `/check lan` 开启手机模式时，已配对的手机仍然有效。
-- 网络传输为明文 HTTP。只在可信网络中使用，不要把端口转发到公网。
+- 默认只对物理 Wi-Fi / 有线网卡（`en*`、`eth*`、`wlan*`、`wl*`）开放；虚拟机网桥与 VPN 隧道既不列出也不响应，除非通过 `--networks <cidr,...>` 显式保存对应网段（`none` 清空）。
+- 已配对设备可以查看全部内容、刷新配额，以及重命名、归档和删除会话；账号同步、配对码和退出登录只能在运行 `agy` 的宿主机上操作。
+- 每台已配对设备获得一个随机 HttpOnly Cookie，磁盘仅保存其 SHA-256 哈希与已保存网段，存放在 `~/.gemini/antigravity-cli/agy-hud-panel-lan.json`（权限 `0600`，仅本人可读），因此重启后设备仍保持登录。`/check lan --revoke` 或 `agy-check panel revoke` 可让所有已配对设备退出登录。
+- `/check stop` 关闭面板，之后普通的 `/check` 只监听 `127.0.0.1`；再次 `/check lan` 开启多端模式时，已配对的设备仍然有效。
+- 网络传输为明文 HTTP。请仅在可信局域网或加密 VPN 组网（WireGuard / Tailscale / ZeroTier）内使用 `--lan`，或改用 SSH 隧道——切勿将 `18721` 端口暴露到公网。
 
 ### 为什么某一轮没命中缓存
 
@@ -172,8 +195,8 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   启动面板（127.0.0.1）
-   [--lan] [--networks <cidr,...>|none]              手机模式：Wi-Fi/有线网络及已保存网段，配对码登录
-agy-check panel pair | revoke                        生成新配对码 | 让所有已配对手机退出登录
+   [--lan] [--networks <cidr,...>|none]              多端模式：局域网 + 已保存 VPN/服务器网段，配对码登录
+agy-check panel pair | revoke                        生成新配对码 | 让所有已配对设备退出登录
 agy-check panel handoff                              将当前 agy 窗口的回环接口连接移交给面板（用于永久删除）
 agy-check panel stop                                 停止后台面板
 agy-check ls [--range 24h] [--sort recent]           输出会话表
@@ -329,7 +352,7 @@ agy-check 只读取 `agy` 和它自己的 Hook 写入的本地文件：
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`：各账号保存的配额。
 - macOS 钥匙串条目 `gemini / antigravity`：用于判断当前登录的账号并请求配额，从不打印 token。
 
-面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。所有写入操作（刷新配额、重命名、归档、删除、账号同步）都会拒绝跨源请求，账号同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。重命名、归档和删除时还可能访问回环地址上 `agy` 自己的语言服务器。没有遥测。
+面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启多端访问（见[多端与服务器接入](#多端与服务器接入)）。所有写入操作（刷新配额、重命名、归档、删除、账号同步）都会拒绝跨源请求，账号同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。重命名、归档和删除时还可能访问回环地址上 `agy` 自己的语言服务器。没有遥测。
 
 ---
 
