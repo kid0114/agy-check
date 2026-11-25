@@ -556,6 +556,7 @@ function createPanelServer(options = {}) {
       path.join(rootDir, 'sessions'),
       path.join(rootDir, 'speed-cache'),
       path.join(rootDir, 'annotations'),
+      path.join(rootDir, 'conversations'),
     ];
     for (const target of watchTargets) {
       try {

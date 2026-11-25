@@ -1072,7 +1072,7 @@ function readAllHookTimings(rootDir = null) {
  * Reads persisted speed-cache entry for a conversation across all candidate path keys
  * (including the legacy ~/.gemini/antigravity/brain/<id>/... path that agy passes in stdin).
  */
-function readSpeedCacheForConversation(convId, baseDir, snapshot = null) {
+function getSpeedCacheCandidatePaths(convId, baseDir, snapshot = null) {
   const candidates = [];
   const addKey = (p) => {
     if (p && typeof p === 'string' && !candidates.includes(p)) candidates.push(p);
@@ -1088,10 +1088,15 @@ function readSpeedCacheForConversation(convId, baseDir, snapshot = null) {
   addKey(snapshot?.transcriptPath);
   addKey(convId);
 
+  return candidates.map((keyTarget) => getSpeedCachePath(baseDir, keyTarget));
+}
+
+function readSpeedCacheForConversation(convId, baseDir, snapshot = null) {
+  const cacheFiles = getSpeedCacheCandidatePaths(convId, baseDir, snapshot);
+
   let best = null;
   let bestMtime = -1;
-  for (const keyTarget of candidates) {
-    const cacheFile = getSpeedCachePath(baseDir, keyTarget);
+  for (const cacheFile of cacheFiles) {
     try {
       const stat = fs.statSync(cacheFile);
       if (!stat.isFile() || stat.mtimeMs <= bestMtime) continue;
@@ -1487,18 +1492,42 @@ function collectAllSessions(options = {}) {
     }
   }
 
+  const conversationsDir = path.join(baseDir, 'conversations');
+  let conversationDbIds = null;
+  try {
+    const entries = fs.readdirSync(conversationsDir);
+    conversationDbIds = new Set();
+    for (const name of entries) {
+      if (name.endsWith('.db')) conversationDbIds.add(name.slice(0, -'.db'.length));
+    }
+  } catch {
+    // conversations/ dir may not exist (e.g. minimal unit-test fixtures)
+  }
+
+  const brainIds = new Set();
   const allIds = new Set();
   try {
     for (const entry of fs.readdirSync(brainDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) allIds.add(entry.name);
+      if (entry.isDirectory()) {
+        brainIds.add(entry.name);
+        allIds.add(entry.name);
+      }
     }
   } catch {
     // brain dir may not exist yet
   }
-  for (const id of snapshots.keys()) allIds.add(id);
+  const hasBackingStore = (id) => !conversationDbIds || conversationDbIds.has(id) || brainIds.has(id);
   for (const id of runningByConv.keys()) allIds.add(id);
+  for (const id of snapshots.keys()) {
+    if (hasBackingStore(id)) allIds.add(id);
+  }
   for (const [id, info] of summaries.entries()) {
-    if (info && info.stepCount > 0) allIds.add(id);
+    if (!info || info.stepCount <= 0) continue;
+    // agy itself skips summary index rows whose trajectory files no longer exist
+    // on disk (deleted conversations can leave or re-acquire stale rows in
+    // conversation_summaries.db across concurrent agy processes).
+    if (!hasBackingStore(id)) continue;
+    allIds.add(id);
   }
 
   const records = [];
@@ -1999,6 +2028,7 @@ module.exports = {
   renameConversationTitle,
   loadConversationSummaries,
   readAllHookTimings,
+  getSpeedCacheCandidatePaths,
   readSpeedCacheForConversation,
   resolveSessionSpeed,
   buildQuotaOverview,

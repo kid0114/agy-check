@@ -14,6 +14,8 @@ const {
   readTextProtoBoolField,
   setTextProtoStringField,
   loadArchivedConversationIds,
+  getSpeedCacheCandidatePaths,
+  collectAllSessions,
 } = require('../../runtime/panel-data.js');
 const ops = require('../../runtime/conversation-ops.js');
 const { detectRunningAgySessions } = require('../../runtime/account-sync.js');
@@ -286,7 +288,50 @@ describe('conversation ops', () => {
         runningSessions: [], deps: fastDeps(),
       });
       assert.equal(res.ok, false);
-      assert.match(res.results[0].error, /still exist: conversation database, brain directory, annotations, summary index row/);
+      assert.match(res.results[0].error, /still exist: conversation database, brain directory, annotations/);
+    } finally {
+      await new Promise(r => server.close(r));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('collectAllSessions hides deleted ghost rows in conversation_summaries.db and delete cleans hashed speed caches', async () => {
+    const root = makeRoot([ID_A, ID_B]);
+    const speedFile = getSpeedCacheCandidatePaths(ID_A, root, null).find(p => p.startsWith(root));
+    fs.writeFileSync(speedFile, JSON.stringify({ speed: 12.3, source: 'hook' }));
+    // Fake LS that deletes the real stores (db, brain, annotations) but leaves a stale row in conversation_summaries.db
+    // (mirrors what happens when concurrent agy processes retain or re-write an old summary index row).
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+        const id = body.conversationId;
+        fs.rmSync(path.join(root, 'annotations', `${id}.pbtxt`), { force: true });
+        fs.rmSync(path.join(root, 'brain', id), { recursive: true, force: true });
+        fs.rmSync(path.join(root, 'conversations', `${id}.db`), { force: true });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      });
+    });
+    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    try {
+      const res = await ops.deleteConversations([ID_A], {
+        rootDir: root,
+        confirm: 'DELETE',
+        endpoints: [{ host: '127.0.0.1', port: server.address().port, csrfToken: 't', agyPid: 1 }],
+        runningSessions: [],
+        deps: fastDeps(),
+      });
+      assert.equal(res.ok, true, JSON.stringify(res));
+      assert.equal(fs.existsSync(speedFile), false, 'hashed speed-cache file should be removed on delete');
+      assert.equal(dbCount(root, ID_A), 1, 'stale summary index row still exists in sqlite');
+
+      // Orphan snapshot without backing store should also be skipped.
+      fs.writeFileSync(path.join(root, 'sessions', `${ID_A}.json`), JSON.stringify({ conversationId: ID_A, updatedAt: Date.now() }));
+      const { sessions } = collectAllSessions({ rootDir: root, runningSessions: [] });
+      assert.equal(sessions.some(s => s.conversationId === ID_A), false, 'deleted ghost session must not appear in overview');
+      assert.equal(sessions.some(s => s.conversationId === ID_B), true, 'live session must still appear');
     } finally {
       await new Promise(r => server.close(r));
       fs.rmSync(root, { recursive: true, force: true });

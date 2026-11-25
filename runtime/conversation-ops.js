@@ -16,16 +16,15 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { resolveAntigravityPath, resolveSafeExecutable } = require('./paths.js');
+const { resolveAntigravityPath } = require('./paths.js');
 const {
   resolveLsEndpoint,
   callLsConversationService,
   writeAnnotationsArchived,
-  querySqliteJson,
-  sqlHexText,
+  getSpeedCacheCandidatePaths,
 } = require('./panel-data.js');
 const { isInteractiveAgyCommand } = require('./account-sync.js');
-const { getSnapshotPath } = require('./session-snapshot.js');
+const { getSnapshotPath, readSessionSnapshot } = require('./session-snapshot.js');
 
 const ENDPOINTS_FILE = 'agy-check-ls-endpoints.json';
 const HANDOFF_COMMAND = 'agy-check panel handoff';
@@ -369,23 +368,17 @@ function remainingArtifacts(baseDir, id) {
   if (fs.existsSync(path.join(baseDir, 'conversations', `${id}.db`))) left.push('conversation database');
   if (fs.existsSync(path.join(baseDir, 'brain', id))) left.push('brain directory');
   if (fs.existsSync(path.join(baseDir, 'annotations', `${id}.pbtxt`))) left.push('annotations');
-  const dbPath = path.join(baseDir, 'conversation_summaries.db');
-  const sqliteBin = resolveSafeExecutable('sqlite3') || (fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : null);
-  if (sqliteBin && fs.existsSync(dbPath)) {
-    try {
-      const rows = querySqliteJson(sqliteBin, dbPath, `SELECT count(*) AS n FROM conversation_summaries WHERE conversation_id = ${sqlHexText(id)};`, 2000);
-      if (Number(rows?.[0]?.n) > 0) left.push('summary index row');
-    } catch {}
-  }
   return left;
 }
 
 function removeOwnArtifacts(baseDir, id) {
+  const snapshot = readSessionSnapshot(id, baseDir);
   const files = [
     path.join(baseDir, 'speed-cache', `hook-timing-${id}.json`),
     getSnapshotPath(id, baseDir),
+    ...getSpeedCacheCandidatePaths(id, baseDir, snapshot),
   ].filter(Boolean);
-  for (const f of files) {
+  for (const f of new Set(files)) {
     try { fs.unlinkSync(f); } catch {}
   }
 }
