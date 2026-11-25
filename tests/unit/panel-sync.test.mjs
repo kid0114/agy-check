@@ -95,5 +95,10 @@ describe('panel auto-sync and heartbeat', () => {
     const uiHashFn = html.slice(html.indexOf('function handleUiHash'), html.indexOf('function stopFallbackPoll'));
     assert.equal(uiHashFn.includes('location.reload'), false, 'handleUiHash must not auto-reload the page');
     assert.ok(uiHashFn.includes('data-reload-page'), 'handleUiHash offers a manual refresh button');
+    const renderOvFn = html.slice(html.indexOf('function renderOverview'), html.indexOf('function renderTopbar'));
+    assert.equal(renderOvFn.includes('lastSyncedAt ='), false, 'local repaint must not fake lastSyncedAt');
+    const fetchOvFn = html.slice(html.indexOf('async function fetchOverview'), html.indexOf('async function openSyncModal'));
+    assert.ok(fetchOvFn.includes('lastSyncedAt = Date.now()'), 'fetchOverview stamps lastSyncedAt on fresh response');
+    assert.ok(fetchOvFn.includes('await fetchDetail('), 'fetchOverview awaits fetchDetail before returning');
   });
 });

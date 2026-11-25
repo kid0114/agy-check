@@ -63,5 +63,10 @@ describe('panel UI session ops', () => {
     assert.ok(html.includes('/api/sessions/delete'), 'delete endpoint wired');
     assert.ok(html.includes("confirm: 'DELETE'"), 'typed DELETE confirmation wired');
     assert.ok(html.includes('agy-check panel handoff'), 'handoff command present');
+    // Mobile CSS regression guards (verified against 390px/375px phone viewports)
+    assert.ok(html.includes('#sessTable, #sessTable.select-mode, #sessTable:not(.select-mode) { min-width: 0; }'), 'mobile min-width overrides both select modes');
+    assert.ok(html.includes('#sessTable.hide-cost #sessionsBody > tr[data-id] > td.c-cost { display: none; }'), 'mobile hide-cost hides cost cell');
+    assert.ok(html.includes('#sessionsBody > tr.checked:not(.selected) > td,'), 'mobile clears checked cell background');
+    assert.ok(html.includes('syncVisualViewport'), 'visualViewport modal sizing wired for iOS keyboard');
   });
 });

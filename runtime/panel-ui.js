@@ -311,7 +311,7 @@ function renderPanelHtml() {
     /* Sessions table */
     .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .table-scroll { overflow-x: auto; }
-    table.sessions { width: 100%; min-width: 1100px; border-collapse: collapse; }
+    table.sessions { width: 100%; min-width: 1060px; border-collapse: collapse; }
     table.sessions th {
       text-align: left;
       font-size: 12px;
@@ -371,7 +371,7 @@ function renderPanelHtml() {
       padding: 18px 22px 16px;
       border-bottom: 1px solid var(--border);
     }
-    .drawer-kicker { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .drawer-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
     .drawer-title-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
     .drawer-title-row[hidden], .rename-form[hidden], .rename-note[hidden] { display: none; }
     .drawer-title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
@@ -477,7 +477,10 @@ function renderPanelHtml() {
     .modal-backdrop {
       display: none;
       position: fixed;
-      inset: 0;
+      top: var(--vv-top, 0px);
+      left: 0;
+      right: 0;
+      height: var(--vv-h, 100dvh);
       z-index: 100;
       align-items: center;
       justify-content: center;
@@ -488,7 +491,7 @@ function renderPanelHtml() {
     .modal {
       width: 100%;
       max-width: 720px;
-      max-height: 86vh;
+      max-height: calc(var(--vv-h, 100dvh) - 48px);
       overflow-y: auto;
       overscroll-behavior: contain;
       background: var(--surface);
@@ -516,7 +519,7 @@ function renderPanelHtml() {
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
     /* Selection, bulk actions and session ops (archive / delete) */
-    table.sessions:not(.select-mode) { min-width: 1060px; }
+    table.sessions.select-mode { min-width: 1100px; }
     table.sessions:not(.select-mode) th.c-sel, table.sessions:not(.select-mode) td.c-sel { display: none; }
     table.sessions th.c-sel, table.sessions td.c-sel { width: 46px; padding: 0 0 0 6px; text-align: center; }
     .sel-hit { display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; cursor: pointer; }
@@ -576,7 +579,7 @@ function renderPanelHtml() {
     .toast-body { flex: 1; min-width: 0; padding-top: 4px; overflow-wrap: anywhere; }
     .op-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
     .handoff { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--text-2); }
-    .handoff code { font-size: 12px; }
+    .handoff code { font-size: 12px; overflow-wrap: anywhere; }
     .ops-note { margin-top: 6px; font-size: 12px; color: var(--amber); line-height: 1.4; }
     .conn-btn { border: 0; background: transparent; cursor: pointer; padding: 3px 8px; border-radius: 999px; transition: background 0.12s, color 0.12s; }
     .conn-btn:hover { background: var(--surface-2); color: var(--text); }
@@ -640,8 +643,8 @@ function renderPanelHtml() {
     /* Phones: sessions become cards, the detail drawer goes full screen, touch targets grow. */
     @media (max-width: 760px) {
       .topbar-inner { padding: calc(10px + env(safe-area-inset-top)) 16px 10px; gap: 10px; }
-      .top-right { width: 100%; justify-content: space-between; gap: 10px; flex-wrap: nowrap; }
-      .acct { min-width: 0; flex: 1; justify-content: flex-end; }
+      .top-right { width: 100%; justify-content: space-between; gap: 6px 10px; flex-wrap: wrap; }
+      .acct { min-width: 0; flex: 1 1 120px; justify-content: flex-end; }
       .acct > .muted, #tierBadge { display: none !important; }
       #acctEmail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
       .app { padding: 18px 14px calc(40px + env(safe-area-inset-bottom)); gap: 14px; }
@@ -665,14 +668,14 @@ function renderPanelHtml() {
       .acct-row { flex-wrap: wrap; row-gap: 2px; }
       .acct-row .acct-email { flex: 1; }
       .acct-row .acct-q { order: 3; flex-basis: 100%; padding-left: 18px; }
-      .toolbar { width: 100%; }
-      .toolbar .btn { flex: 1; justify-content: center; }
-      .field.search { flex: 1 1 100%; height: 38px; }
+      .toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; }
+      .toolbar .btn { width: 100%; justify-content: center; padding: 0 8px; font-size: 12.5px; }
+      .toolbar .field.search, .toolbar #accountFilter { grid-column: 1 / -1; width: 100%; height: 38px; }
       /* iOS zooms into inputs under 16px on focus, which pushes the page past the screen edge. */
       input.field, select.field { font-size: 16px; }
 
       .table-scroll { overflow: visible; }
-      table.sessions { min-width: 0; }
+      #sessTable, #sessTable.select-mode, #sessTable:not(.select-mode) { min-width: 0; }
       table.sessions, table.sessions tbody { display: block; width: 100%; }
       table.sessions thead { display: none; }
       #sessionsBody > tr[data-id] {
@@ -687,9 +690,19 @@ function renderPanelHtml() {
         padding: 14px 16px;
         border-bottom: 1px solid var(--border);
       }
+      #sessTable.hide-cost #sessionsBody > tr[data-id] {
+        grid-template-areas:
+          "session session session session session session"
+          "status status status model model model"
+          "hit hit speed speed tokens tokens"
+          "turns turns ctx ctx tool tool";
+      }
+      #sessTable.hide-cost #sessionsBody > tr[data-id] > td.c-cost { display: none; }
       #sessionsBody > tr[data-id] > td,
       #sessionsBody > tr[data-id]:hover > td,
-      #sessionsBody > tr.selected > td {
+      #sessionsBody > tr.selected > td,
+      #sessionsBody > tr.checked:not(.selected) > td,
+      #sessionsBody > tr.checked:not(.selected):hover > td {
         display: block;
         min-width: 0;
         padding: 0;
@@ -713,6 +726,7 @@ function renderPanelHtml() {
       td.c-ctx { grid-area: ctx; }
       td.c-tool { grid-area: tool; }
       td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 3px; font-size: 11px; color: var(--muted); }
+      td.c-status .status { flex-wrap: wrap; row-gap: 4px; }
       td.c-status .s { display: inline; margin-left: 8px; }
       td.c-session .title { font-size: 14.5px; }
       td.c-session .meta { white-space: normal; }
@@ -725,10 +739,16 @@ function renderPanelHtml() {
       td.c-model .v { white-space: normal; overflow-wrap: anywhere; }
       .table-foot { padding: 12px 16px; }
 
-      .drawer-head { padding: calc(14px + env(safe-area-inset-top)) 16px 12px; }
+      .drawer-head { position: relative; flex-direction: column; align-items: stretch; gap: 10px; padding: calc(14px + env(safe-area-inset-top)) 16px 12px; }
+      .drawer-head > div:first-child { padding-right: 42px; }
+      #btnCloseDetail { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; }
+      .drawer-actions { width: 100%; flex-wrap: wrap; gap: 8px; }
+      .drawer-actions > .btn, .drawer-actions > .ops-wrap { flex: 1 1 0; min-width: 0; }
+      .drawer-actions > .ops-wrap > .btn { flex: 1; }
+      .drawer-actions .btn.sm { justify-content: center; padding: 0 10px; }
+      .drawer-actions .copy-long { display: none; }
       .btn.icon.sm-icon { width: 32px; height: 32px; min-height: 32px; }
       .rename-input { flex-basis: 100%; height: 38px; font-size: 16px; }
-      #btnCopyResumeLabel { display: none; }
       .chips { padding: 12px 16px; }
       .stat { padding: 12px 16px; }
       .stat-value { font-size: 16px; }
@@ -738,7 +758,9 @@ function renderPanelHtml() {
       table.turns th:first-child, table.turns td:first-child { padding-left: 16px; }
       table.turns th:last-child, table.turns td:last-child { padding-right: 16px; }
       table.turns td.diag { min-width: 0; }
-      .modal { padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
+      .modal-backdrop { padding: 12px; align-items: flex-start; overflow-y: auto; }
+      .modal { max-height: calc(var(--vv-h, 100dvh) - 24px); margin: auto 0; padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
+      .modal-actions { flex-wrap: wrap; }
 
       /* Selection checkbox appears only in Select mode, pinned to the card's left edge with a 44px touch target. */
       #sessTable:not(.select-mode) #sessionsBody > tr[data-id] > td.c-sel { display: none; }
@@ -756,8 +778,6 @@ function renderPanelHtml() {
       .bulk-actions > .ops-wrap > .btn { flex: 1; }
       body.bulk-open .app { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
       .toast { left: 12px; right: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); }
-      .drawer-actions .act-label { display: none; }
-      .drawer-actions .btn.sm { padding: 0 10px; }
     }
   </style>
 </head>
@@ -901,9 +921,9 @@ function renderPanelHtml() {
             <span class="act-label">Delete</span>
           </button>
         </span>
-        <button id="btnCopyResume" class="btn sm">
+        <button id="btnCopyResume" class="btn sm" aria-label="Copy resume command">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-          <span id="btnCopyResumeLabel">Copy resume command</span>
+          <span id="btnCopyResumeLabel">Copy<span class="copy-long"> resume command</span></span>
         </button>
         <button id="btnCloseDetail" class="btn ghost icon" title="Close (Esc)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -1172,7 +1192,6 @@ function renderPanelHtml() {
 
     function renderOverview(data) {
       state.overview = data;
-      lastSyncedAt = Date.now();
       updateConnTitle();
       handleUiHash(data.uiHash);
       if (data.ops) state.ops = data.ops;
@@ -1909,11 +1928,12 @@ function renderPanelHtml() {
         if (!res.ok) return;
         const data = await res.json();
         if (seq !== overviewSeq) return; // a newer request superseded this one
+        lastSyncedAt = Date.now();
         renderOverview(data);
       } catch {
         return;
       }
-      if (state.selectedId) fetchDetail(state.selectedId);
+      if (state.selectedId) await fetchDetail(state.selectedId);
     }
 
     async function openSyncModal() {
@@ -2105,6 +2125,10 @@ function renderPanelHtml() {
         }
         const okItems = out.results.filter(r => r.ok);
         const badItems = out.results.filter(r => !r.ok);
+        if (state.detail && okItems.some(r => r.conversationId === state.detail.conversationId)) {
+          state.detail.archived = archived;
+          renderDetail(state.detail);
+        }
         if (opts.fromBulk) {
           for (const r of okItems) state.checkedIds.delete(r.conversationId);
           if (badItems.length === 0 && state.checkedIds.size === 0) setSelectMode(false);
@@ -2222,6 +2246,7 @@ function renderPanelHtml() {
       $('deleteResults').hidden = true;
       $('deleteResults').innerHTML = '';
       renderDeleteModal();
+      syncVisualViewport();
       $('deleteModal').classList.add('open');
       $('deleteConfirmInput').focus();
     }
@@ -2515,7 +2540,7 @@ function renderPanelHtml() {
       if (!state.detail?.resumeCommand) return;
       if (await copyText(state.detail.resumeCommand)) {
         $('btnCopyResumeLabel').textContent = 'Copied';
-        setTimeout(() => { $('btnCopyResumeLabel').textContent = 'Copy resume command'; }, 1200);
+        setTimeout(() => { $('btnCopyResumeLabel').innerHTML = 'Copy<span class="copy-long"> resume command</span>'; }, 1200);
       }
     });
 
@@ -2640,7 +2665,19 @@ function renderPanelHtml() {
     });
 
     let resizeTimer = null;
+    function syncVisualViewport() {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      document.documentElement.style.setProperty('--vv-h', Math.round(vv.height) + 'px');
+      document.documentElement.style.setProperty('--vv-top', Math.round(vv.offsetTop) + 'px');
+    }
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncVisualViewport);
+      window.visualViewport.addEventListener('scroll', syncVisualViewport);
+      syncVisualViewport();
+    }
     window.addEventListener('resize', () => {
+      syncVisualViewport();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         if (state.detail && $('drawer').classList.contains('open')) {
