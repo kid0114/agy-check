@@ -2670,37 +2670,19 @@ function renderPanelHtml() {
       $('connState').title = synced + 'Click to sync now';
     }
 
-    function isUserBusy() {
-      return Boolean(
-        !$('renameForm').hidden ||
-        $('deleteModal').classList.contains('open') ||
-        $('syncModal').classList.contains('open') ||
-        $('lanModal').classList.contains('open') ||
-        state.selectMode ||
-        state.checkedIds.size > 0 ||
-        (document.activeElement === $('searchInput') && $('searchInput').value.trim().length > 0)
-      );
-    }
-
     function handleUiHash(hash) {
       if (!hash || typeof hash !== 'string') return;
       if (!currentUiHash) {
         currentUiHash = hash;
         return;
       }
-      if (hash === currentUiHash) return;
-      if (!isUserBusy()) {
-        location.reload();
-        return;
-      }
-      if (reloadPromptedHash !== hash) {
-        reloadPromptedHash = hash;
-        showToast('Panel updated to a newer version. Reload to load the latest interface.', {
-          tone: 'warn',
-          action: { label: 'Reload now', attr: 'data-reload-page="1"' },
-          sticky: true,
-        });
-      }
+      if (hash === currentUiHash || reloadPromptedHash === hash) return;
+      reloadPromptedHash = hash;
+      showToast('Panel updated. Refresh the page whenever you are ready.', {
+        tone: 'warn',
+        action: { label: 'Refresh', attr: 'data-reload-page="1"' },
+        sticky: true,
+      });
     }
 
     function stopFallbackPoll() {

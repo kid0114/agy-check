@@ -94,7 +94,7 @@ node scripts/bootstrap.js
 
 ![会话详情](./assets/panel-session-detail.png)
 
-页面通过 Server-Sent Events 自动更新：任何 `agy` 会话日志或 `conversation_summaries.db`（含 `/rename` 的 WAL 写入）有变化，大约一秒内数字和标题就会刷新。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序和列开关会保存在浏览器里。
+页面通过 Server-Sent Events 自动保持同步：任何 `agy` 会话日志、`conversation_summaries.db`（含 `/rename` 的 WAL 写入）、`annotations/`、`conversations/` 或 `presence/` 有变化，大约一秒内数字、标题和运行状态就会更新。每 20 秒的 SSE 心跳会自动发现休眠/切后台导致的假死连接，重连或切回标签页时立刻补拉数据，断连期间降级为 5 秒轮询；点击顶部的 **Live** 指示灯也可随时手动触发同步。有页面打开时，云端配额每 3 分钟在后台静默刷新一次。面板升级重启后，页面只弹出可关闭的提示让你按需手动刷新，不会擅自整页重载。正在生成的这一轮，要等 `agy` 写入日志后才会计入。时间范围、排序、空会话/归档筛选与费用开关会保存在浏览器里（`Select` 模式默认关闭）。
 
 ### 在手机上查看
 
@@ -319,12 +319,14 @@ agy-check 只读取 `agy` 和它自己的 Hook 写入的本地文件：
 
 - `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`：轮次、token 数、时间戳。
 - `~/.gemini/antigravity-cli/conversation_summaries.db`：会话标题与步数（平时以 `PRAGMA query_only = ON` 只读查询，仅在你在面板中主动重命名会话时通过事务更新 `title`、`raw_summary` 与 `conversations_fts` 检索索引）。它是 `agy` 会重新生成的索引，因此改名从不只写这里。
-- `~/.gemini/antigravity-cli/annotations/<id>.pbtxt`：`agy` 中用户可编辑的会话元数据。改名且 `agy` 本地接口不可用时，以原子方式只改写其中的 `title` 字段。
-- `~/.gemini/antigravity-cli/speed-cache/` 与 `sessions/`：agy-check 写入的 Hook 计时与会话快照。
+- `~/.gemini/antigravity-cli/annotations/<id>.pbtxt`：`agy` 中用户可编辑的会话元数据。在面板重命名或归档且 `agy` 本地接口不可用时，以原子方式只改写其中的 `title` 或 `archived` 字段，保留其余字段。
+- `~/.gemini/antigravity-cli/conversations/<id>.db` 与 `presence/<id>.lock`：仅作只读检查与目录监听，用于识别交互式 `agy` 窗口当前打开的会话，并过滤掉 `conversation_summaries.db` 中已删除会话残留的幽灵行。
+- `~/.gemini/antigravity-cli/agy-check-ls-endpoints.json`（权限 `0600`）：由 `agy-check panel handoff` 写入的回环地址与 CSRF token 连接池，仅在面板后端使用，调用前核对监听进程 PID 仍属原 `agy`。
+- `~/.gemini/antigravity-cli/speed-cache/` 与 `sessions/`：agy-check 写入的 Hook 计时、速度缓存与会话快照（在面板永久删除会话时会一并清理）。
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`：各账号保存的配额。
 - macOS 钥匙串条目 `gemini / antigravity`：用于判断当前登录的账号并请求配额，从不打印 token。
 
-面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。所有写入操作（刷新配额、重命名会话、同步）都会拒绝跨源请求，同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。改名时还可能访问回环地址上 `agy` 自己的语言服务器。没有遥测。
+面板默认只绑定 `127.0.0.1`，除非你用 `/check lan` 开启手机访问（见[在手机上查看](#在手机上查看)）。所有写入操作（刷新配额、重命名、归档、删除、账号同步）都会拒绝跨源请求，账号同步也绝不对其他设备开放。网络请求只有两类：使用当前登录访问 Google 的 Antigravity 配额与 userinfo 接口，以及每天一次对本仓库 GitHub 上 `package.json` 的版本检查。重命名、归档和删除时还可能访问回环地址上 `agy` 自己的语言服务器。没有遥测。
 
 ---
 

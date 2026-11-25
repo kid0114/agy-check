@@ -94,7 +94,7 @@ A hook answers `/check` before any model call, so it costs no tokens. It starts 
 
 ![Session detail](./assets/panel-session-detail.png)
 
-The page updates by itself through Server-Sent Events whenever an `agy` transcript or `conversation_summaries.db` (including WAL updates from `/rename`) changes, so numbers and titles move within about a second. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order and column toggles are remembered in the browser.
+The page stays in sync through Server-Sent Events whenever an `agy` transcript, `conversation_summaries.db` (including WAL updates from `/rename`), `annotations/`, `conversations/`, or `presence/` changes, so numbers, titles and running status update within about a second. A 20-second heartbeat detects silently stalled connections (such as a phone or laptop waking from sleep), refetches on reconnect or tab focus, and falls back to 5-second polling while reconnecting; clicking the **Live** pill forces an immediate sync. While at least one dashboard tab is open, cloud quota refreshes quietly in the background every 3 minutes. If the panel restarts with a newer interface, a dismissible notice invites you to refresh manually rather than reloading the page unexpectedly. A turn that is still being generated is counted once `agy` writes it to the transcript. Your time range, sort order, empty/archived filters and cost toggle are remembered in the browser (`Select` mode always starts off).
 
 ### On your phone
 
@@ -319,12 +319,14 @@ agy-check only reads local files that `agy` and its own hooks write:
 
 - `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`: turns, token counts, timestamps.
 - `~/.gemini/antigravity-cli/conversation_summaries.db`: conversation titles and step counts (queried with `PRAGMA query_only = ON`, and updated in a transaction only when you rename a session from the dashboard, keeping `title`, `raw_summary` and `conversations_fts` in sync). This is an index that `agy` regenerates, so it is never the only place a rename is written.
-- `~/.gemini/antigravity-cli/annotations/<id>.pbtxt`: `agy`'s user-editable conversation metadata. Written (only the `title` field, atomically) when you rename a session and `agy`'s local API is not available.
-- `~/.gemini/antigravity-cli/speed-cache/` and `sessions/`: hook timings and per-session snapshots written by agy-check.
+- `~/.gemini/antigravity-cli/annotations/<id>.pbtxt`: `agy`'s user-editable conversation metadata. Updated atomically (only `title` or `archived`, leaving other fields intact) when you rename or archive a session and `agy`'s local API is not available.
+- `~/.gemini/antigravity-cli/conversations/<id>.db` and `presence/<id>.lock`: inspected (never modified directly) to detect which interactive `agy` window holds a conversation and to filter out deleted ghost rows left in `conversation_summaries.db`.
+- `~/.gemini/antigravity-cli/agy-check-ls-endpoints.json` (mode `0600`): loopback addresses and CSRF tokens handed off by `agy-check panel handoff`, kept strictly server-side and verified against live `agy` listener PIDs before use.
+- `~/.gemini/antigravity-cli/speed-cache/` and `sessions/`: hook timings and per-session snapshots written by agy-check (cleaned when a session is deleted from the dashboard).
 - `~/.gemini/antigravity-cli/agy-hud-accounts-quota.json`: saved quota per account.
 - The macOS Keychain item `gemini / antigravity`: read to know which account is active and to request quota. Tokens are never printed.
 
-The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. Renames may also call `agy`'s own language server on a loopback address. There is no telemetry.
+The dashboard binds to `127.0.0.1` only, unless you turn on phone access with `/check lan` (see [On your phone](#on-your-phone)). Its write actions (quota refresh, session rename, archive, delete and sync) reject cross-origin requests, and sync never runs for other devices. The only network requests go to Google's Antigravity quota and userinfo endpoints, made with the active login, plus a once-a-day version check against this repository's `package.json` on GitHub. Renames, archives and deletes may also call `agy`'s own language server on a loopback address. There is no telemetry.
 
 ---
 

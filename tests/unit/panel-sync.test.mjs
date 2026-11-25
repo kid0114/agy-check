@@ -83,7 +83,7 @@ describe('panel auto-sync and heartbeat', () => {
     }
   });
 
-  test('frontend wires visibilitychange, online, heartbeat watchdog, uiHash reload, and clickable sync pill', () => {
+  test('frontend wires visibilitychange, online, heartbeat watchdog, manual-refresh uiHash prompt, and clickable sync pill', () => {
     const html = renderPanelHtml();
     assert.ok(html.includes('<button id="connState"'), 'connection status pill is clickable');
     assert.ok(html.includes("addEventListener('ping'"), 'SSE ping listener wired');
@@ -92,5 +92,8 @@ describe('panel auto-sync and heartbeat', () => {
     assert.ok(html.includes("addEventListener('online'"), 'network online recovery wired');
     assert.ok(html.includes('handleUiHash'), 'UI build hash check wired');
     assert.ok(html.includes('startFallbackPoll'), 'fallback polling during reconnect wired');
+    const uiHashFn = html.slice(html.indexOf('function handleUiHash'), html.indexOf('function stopFallbackPoll'));
+    assert.equal(uiHashFn.includes('location.reload'), false, 'handleUiHash must not auto-reload the page');
+    assert.ok(uiHashFn.includes('data-reload-page'), 'handleUiHash offers a manual refresh button');
   });
 });
