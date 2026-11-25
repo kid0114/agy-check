@@ -110,7 +110,7 @@ node scripts/bootstrap.js
 2. 输入配对码。配对码 10 分钟内有效、只能使用一次，连续输错 5 次即作废。
 3. 配对后手机保持登录 30 天，到期后会重新显示配对页面。也可以添加到主屏幕；主屏幕应用有独立的登录状态，需要在其中再配对一次。
 
-在电脑上，顶栏的 **Phone** 按钮会显示访问地址和新的配对码、当前已登录的手机数量，以及 **Sign out all phones**（让所有手机退出登录）。手机上会话以卡片显示，详情面板占满全屏。
+在电脑上，顶栏的 **Phone** 按钮会显示访问地址和新的配对码、当前已登录的手机数量，以及 **Sign out all phones**（让所有手机退出登录）。手机上会话以响应式卡片展示（支持 **Show cost** 切换，平时隐藏勾选框、点 **Select** 后才显示），详情面板占满全屏并在标题下方提供带文字标签的 **Archive / Delete / Copy** 操作栏，删除确认弹窗跟踪 `visualViewport` 避免被 iOS 软键盘遮挡。
 
 <p align="center">
   <img src="./assets/phone-pair.png" alt="配对页面" width="200">
@@ -172,6 +172,7 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 agy-check panel [--port 18721] [--daemon] [--open]   启动面板（127.0.0.1）
    [--lan] [--networks <cidr,...>|none]              手机模式：Wi-Fi/有线网络及已保存网段，配对码登录
 agy-check panel pair | revoke                        生成新配对码 | 让所有已配对手机退出登录
+agy-check panel handoff                              将当前 agy 窗口的回环接口连接移交给面板（用于永久删除）
 agy-check panel stop                                 停止后台面板
 agy-check ls [--range 24h] [--sort recent]           输出会话表
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]

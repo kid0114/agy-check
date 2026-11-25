@@ -110,7 +110,7 @@ This switches the dashboard into phone mode and prints the address to open, such
 2. Enter the code. It is valid for 10 minutes, works once, and is cancelled after five wrong tries.
 3. The phone then stays signed in for 30 days; after that it shows the pairing page again. It can also be added to the home screen. A home-screen app keeps its own sign-in, so pair it once from there.
 
-On the computer, the **Phone** button in the top bar shows the addresses and a fresh code, the number of signed-in phones, and **Sign out all phones**. On phones, sessions show as cards and the detail panel fills the screen.
+On the computer, the **Phone** button in the top bar shows the addresses and a fresh code, the number of signed-in phones, and **Sign out all phones**. On phones, sessions show as responsive cards (respecting **Show cost** and hiding checkboxes until **Select** is toggled), the detail panel fills the screen with a dedicated **Archive / Delete / Copy** action bar below the title, and confirmation dialogs track `visualViewport` so inputs stay above the iOS keyboard.
 
 <p align="center">
   <img src="./assets/phone-pair.png" alt="Pairing page" width="200">
@@ -172,6 +172,7 @@ ln -s ~/.gemini/antigravity-cli/agy-hud-runtime/runtime/bin/agy-check.js ~/.loca
 agy-check panel [--port 18721] [--daemon] [--open]   Start the dashboard (127.0.0.1)
    [--lan] [--networks <cidr,...>|none]              Phone mode: Wi-Fi/Ethernet plus saved networks, pairing code
 agy-check panel pair | revoke                        New pairing code | sign out all paired phones
+agy-check panel handoff                              Hand this agy window's loopback API connection to the panel (for permanent delete)
 agy-check panel stop                                 Stop the background dashboard
 agy-check ls [--range 24h] [--sort recent]           Print the session table
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
