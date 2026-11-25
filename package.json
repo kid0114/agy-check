@@ -1,6 +1,6 @@
 {
   "name": "agy-check",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Multi-device dashboard, session manager & 1-click multi-account switcher for Antigravity CLI (agy) — persist multiple agy auth profiles in OS keyring, sync Gemini & 3P quota, prompt cache hit rate & cost across desktop, phone PWA, LAN/TUN & remote servers.",
   "main": "runtime/bin/agy-hud.js",
   "files": [
