@@ -218,11 +218,15 @@ describe('multi-session panel & account-sync', () => {
 
       const dry = parseSyncDryRunOutput([
         'Keychain: present=True email=b@gmail.com expiry=2026-11-23T18:00:00Z expired=False',
-        'Other interactive agy PIDs (2): [101, 102]',
+        'Other interactive agy PIDs (4): [101, 102, 103, 104]',
+        "  [replace] pid=103 session=0123456789abcdef conv=33333333-3333-4333-8333-333333333333 steps=5 title='Managed' cwd=/Users/dev",
+        '  [close]   pid=104 session=fedcba9876543210 conv=None (0 steps owned tab)',
         "  [reopen] pid=101 conv=11111111-1111-1111-1111-111111111111 steps=12 title='Fix bug' cwd=/Users/dev",
         '  [skip]   pid=102 conv=None (no conversation)',
       ].join('\n'));
       assert.equal(dry.keychain.email, 'b@gmail.com');
+      assert.equal(dry.replace.length, 1);
+      assert.equal(dry.close.length, 1);
       assert.equal(dry.reopen.length, 1);
       assert.equal(dry.skipped.length, 1);
 

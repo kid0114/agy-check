@@ -16,6 +16,7 @@
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { getAntigravityRoots } = require('./paths.js');
@@ -158,6 +159,8 @@ async function getQuota(options = {}) {
 /**
  * Proactively refresh quota, tier, and account email for the current live token.
  * Used by both `--refresh` background jobs and the multi-session panel.
+ * Supports captured credential snapshots and atomic pre-commit fencing so a
+ * superseded refresh can never overwrite a newly switched account's cache.
  */
 async function refreshQuotaNow(options = {}) {
   const {
@@ -168,15 +171,84 @@ async function refreshQuotaNow(options = {}) {
     tierFetcher = fetchTierFromCloud,
     emailFetcher = fetchAccountEmail,
     cacheWriter = writeCache,
+    tokenSnapshot = null,
+    expectedEmail = null,
+    expectedTokenHash = null,
+    commitFence = null,
   } = options;
 
+  const normEmail = (v) => (typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : null);
+  const wantEmail = normEmail(expectedEmail);
+  const readVaultActivationGen = () => {
+    const primaryRoot = Array.isArray(roots) && roots[0] ? roots[0] : null;
+    if (!primaryRoot) return null;
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(primaryRoot, 'agy-check-vault-meta.json'), 'utf8'));
+      return Number.isInteger(meta?.activationGen) && meta.activationGen >= 0 ? meta.activationGen : 0;
+    } catch {
+      return null;
+    }
+  };
+
   try {
-    const tok = tokenReader({ platform, roots });
+    const initialVaultGen = readVaultActivationGen();
+    const tok = tokenSnapshot || tokenReader({ platform, roots });
     if (!tok) {
       return { ok: false, reason: 'not_logged_in', email: null, tier: null, data: [] };
     }
+    const tokEmail = normEmail(tok.email);
+    const tokHash = cacheMod.getTokenHash(tok);
+    if (wantEmail && tokEmail && tokEmail !== wantEmail) {
+      return { ok: false, reason: 'superseded', email: tok.email || null, tier: null, data: [] };
+    }
+    if (expectedTokenHash && tokHash && tokHash !== expectedTokenHash) {
+      return { ok: false, reason: 'superseded', email: tok.email || null, tier: null, data: [] };
+    }
     if (isTokenExpired(tok)) {
       return { ok: false, reason: 'expired_token', email: tok.email || null, tier: null, data: [] };
+    }
+
+    const initialEmail = wantEmail || tokEmail || null;
+    const initialTokenHash = expectedTokenHash || tokHash || null;
+    const shouldReverifyToken = Boolean(!tokenSnapshot || options.tokenReader || typeof commitFence !== 'function');
+
+    const verifyStillCurrent = () => {
+      if (typeof commitFence === 'function') {
+        try {
+          if (commitFence() === false) return false;
+        } catch {
+          return false;
+        }
+      } else {
+        // Default ABA guard even when caller didn't supply a custom commitFence:
+        // reject commit if vault activationGen changed (including A -> B -> A).
+        const curVaultGen = readVaultActivationGen();
+        if (initialVaultGen !== null && curVaultGen !== null && curVaultGen !== initialVaultGen) {
+          return false;
+        }
+        if (initialVaultGen === null && curVaultGen !== null && curVaultGen > 0) {
+          return false;
+        }
+      }
+      if (shouldReverifyToken) {
+        try {
+          const liveTok = tokenReader({ platform, roots });
+          if (!liveTok) return false;
+          const liveEmail = normEmail(liveTok.email);
+          const liveHash = cacheMod.getTokenHash(liveTok);
+          if (wantEmail && liveEmail && liveEmail !== wantEmail) return false;
+          if (initialEmail && liveEmail && liveEmail !== initialEmail) return false;
+          if (expectedTokenHash && !wantEmail && liveHash && liveHash !== expectedTokenHash) return false;
+          if (!initialEmail && initialTokenHash && liveHash && liveHash !== initialTokenHash) return false;
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    if (typeof commitFence === 'function' && commitFence() === false) {
+      return { ok: false, reason: 'superseded', email: tok.email || null, tier: null, data: [] };
     }
 
     const [fresh, tier, fetchedEmail] = await Promise.all([
@@ -185,15 +257,33 @@ async function refreshQuotaNow(options = {}) {
       emailFetcher(tok.accessToken).catch(() => null),
     ]);
     const accountEmail = fetchedEmail || tok.email || null;
+    if (wantEmail && accountEmail && normEmail(accountEmail) !== wantEmail) {
+      return { ok: false, reason: 'superseded', email: accountEmail, tier: tier || null, data: [] };
+    }
 
     if (fresh && fresh.unavailableReason === 'auth_failed') {
+      if (!verifyStillCurrent()) {
+        return { ok: false, reason: 'superseded', email: accountEmail, tier: tier || null, data: [] };
+      }
       tokenMod.clearTokenTemp(roots);
       return { ok: false, reason: 'auth_failed', email: accountEmail, tier: tier || null, data: [] };
     }
 
     if ((Array.isArray(fresh) && fresh.length > 0) || accountEmail) {
       const normalizedFresh = Array.isArray(fresh) ? fresh : [];
-      cacheWriter(normalizedFresh, tok, tier, accountEmail, normalizedFresh.providerQuota);
+      if (cacheWriter === writeCache) {
+        const committed = cacheWriter(normalizedFresh, tok, tier, accountEmail, normalizedFresh.providerQuota, {
+          beforeCommit: verifyStillCurrent,
+        });
+        if (!committed) {
+          return { ok: false, reason: 'superseded', email: accountEmail, tier: tier || null, data: [] };
+        }
+      } else {
+        if (!verifyStillCurrent()) {
+          return { ok: false, reason: 'superseded', email: accountEmail, tier: tier || null, data: [] };
+        }
+        cacheWriter(normalizedFresh, tok, tier, accountEmail, normalizedFresh.providerQuota);
+      }
       return {
         ok: true,
         reason: null,
@@ -226,9 +316,37 @@ async function refreshQuotaNow(options = {}) {
 // ─── CLI Execution for background refreshes ──────────────────────────────────
 if (process.argv.includes('--refresh')) {
   (async () => {
+    const argv = process.argv.slice(2);
+    const getArg = (flag) => {
+      const idx = argv.indexOf(flag);
+      return idx !== -1 && idx + 1 < argv.length ? argv[idx + 1] : null;
+    };
+    const expectedEmail = getArg('--expected-email') || null;
+    const expectedGenRaw = getArg('--expected-gen');
+    const expectedGen = expectedGenRaw !== null && /^\d+$/.test(expectedGenRaw)
+      ? Number.parseInt(expectedGenRaw, 10)
+      : null;
+    const printStatus = argv.includes('--print-status');
+    let commitFence = null;
+    if (expectedGen !== null) {
+      const { readVaultMeta } = require('./account-vault.js');
+      commitFence = () => readVaultMeta().activationGen === expectedGen;
+    }
     try {
-      await refreshQuotaNow();
-    } catch {}
+      const res = await refreshQuotaNow({
+        expectedEmail,
+        commitFence,
+      });
+      if (printStatus) {
+        process.stdout.write(`${JSON.stringify({ ok: Boolean(res?.ok), reason: res?.reason || null })}\n`);
+        process.exit(res?.ok ? 0 : (res?.reason === 'superseded' ? 2 : 1));
+      }
+    } catch (err) {
+      if (printStatus) {
+        process.stdout.write(`${JSON.stringify({ ok: false, reason: err?.message || 'refresh_failed' })}\n`);
+        process.exit(1);
+      }
+    }
     process.exit(0);
   })();
 }

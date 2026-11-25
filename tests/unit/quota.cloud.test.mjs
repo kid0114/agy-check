@@ -404,6 +404,33 @@ describe('quota / cloud', () => {
       assert.equal(parsed.claude.fiveHour.remainingFraction, 0);
     });
 
+    test('preserves unused full buckets when Google omits resetTime (e.g. fresh 100% 3P / Opus account)', () => {
+      const parsed = parseQuotaSummary({
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [
+              { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.99, resetTime: '2026-12-02T21:46:47Z' },
+              { bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.98, resetTime: '2026-11-26T02:46:47Z' },
+            ],
+          },
+          {
+            displayName: 'Claude and GPT models',
+            buckets: [
+              { bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1 },
+              { bucketId: '3p-5h', window: '5h', remainingFraction: 1 },
+              { bucketId: '3p-empty', window: 'weekly' }, // missing both resetTime and remainingFraction -> ignored
+            ],
+          },
+        ],
+      });
+
+      assert.equal(parsed.claude.weekly.remainingFraction, 1);
+      assert.equal(parsed.claude.weekly.resetTime, null);
+      assert.equal(parsed.claude.fiveHour.remainingFraction, 1);
+      assert.equal(parsed.claude.fiveHour.resetTime, null);
+    });
+
     test('selects the most constrained (lowest remainingFraction) bucket when multiple buckets exist for the same window', () => {
       const resetTime = '2026-09-10T08:00:00Z';
       const parsed = parseQuotaSummary({

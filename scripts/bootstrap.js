@@ -23,6 +23,7 @@ const RUNTIME_FILES = [
   'runtime/daily-cost.js',
   'runtime/encoding.js',
   'runtime/invocation-timer.js',
+  'runtime/managed-launcher.js',
   'runtime/panel-cli.js',
   'runtime/panel-data.js',
   'runtime/panel-server.js',

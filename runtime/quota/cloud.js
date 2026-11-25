@@ -213,16 +213,25 @@ function parseQuotaSummary(data) {
     else continue;
 
     for (const b of buckets) {
-      if (!b || typeof b.resetTime !== 'string') continue;
-      const ts = Date.parse(b.resetTime);
-      if (!Number.isFinite(ts)) continue;
+      if (!b || typeof b !== 'object') continue;
+      let validResetTime = null;
+      if (b.resetTime !== undefined && b.resetTime !== null && b.resetTime !== '') {
+        if (typeof b.resetTime !== 'string') continue;
+        const ts = Date.parse(b.resetTime);
+        if (!Number.isFinite(ts)) continue;
+        validResetTime = b.resetTime;
+      } else if (typeof b.remainingFraction !== 'number') {
+        // Without a resetTime, require an explicit numeric remainingFraction so empty
+        // placeholder buckets are not treated as Proto3-omitted 0%.
+        continue;
+      }
       const bucketId = b.bucketId || '';
       const windowRaw = b.window || '';
       let winType = null;
       if (windowRaw === 'weekly' || bucketId.includes('weekly')) winType = 'weekly';
       else if (windowRaw === '5h' || bucketId.includes('5h') || bucketId.includes('fiveHour')) winType = 'fiveHour';
       else continue;
-      // Proto3 may omit a default 0 remainingFraction.
+      // Proto3 may omit a default 0 remainingFraction (when resetTime is present).
       let rf = typeof b.remainingFraction === 'number' ? b.remainingFraction : 0;
       if (!Number.isFinite(rf) || rf < 0) rf = 0;
       if (rf > 1) rf = 1;
@@ -231,7 +240,7 @@ function parseQuotaSummary(data) {
       if (!existing || rf < existing.remainingFraction) {
         result[target][winType] = {
           remainingFraction: rf,
-          resetTime: b.resetTime,
+          resetTime: validResetTime,
         };
         hasAny = true;
       }

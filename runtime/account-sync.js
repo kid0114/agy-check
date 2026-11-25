@@ -415,6 +415,8 @@ function parseSyncDryRunOutput(rawOutput) {
   const result = {
     keychain: null,
     reopen: [],
+    replace: [],
+    close: [],
     skipped: [],
     self: null,
     otherPidCount: 0,
@@ -435,6 +437,28 @@ function parseSyncDryRunOutput(rawOutput) {
     } else if (trimmed.startsWith('Other interactive agy PIDs')) {
       const m = trimmed.match(/\((\d+)\)/);
       if (m) result.otherPidCount = Number.parseInt(m[1], 10);
+    } else if (trimmed.startsWith('[replace]')) {
+      const m = trimmed.match(/pid=(\d+)\s+session=(\S+)\s+conv=(\S+)\s+steps=(\d+)\s+title=(.*?)\s+cwd=(.+)$/);
+      if (m) {
+        result.replace.push({
+          pid: Number.parseInt(m[1], 10),
+          sessionId: m[2],
+          conversationId: m[3],
+          steps: Number.parseInt(m[4], 10),
+          title: m[5].replace(/^['"]|['"]$/g, ''),
+          cwd: m[6],
+        });
+      }
+    } else if (trimmed.startsWith('[close]')) {
+      const m = trimmed.match(/pid=(\d+)\s+session=(\S+)\s+conv=(\S+)\s+\((.+)\)$/);
+      if (m) {
+        result.close.push({
+          pid: Number.parseInt(m[1], 10),
+          sessionId: m[2],
+          conversationId: m[3] === 'None' ? null : m[3],
+          reason: m[4],
+        });
+      }
     } else if (trimmed.startsWith('[reopen]')) {
       const m = trimmed.match(/pid=(\d+)\s+conv=(\S+)\s+steps=(\d+)\s+title=(.*?)\s+cwd=(.+)$/);
       if (m) {
@@ -505,6 +529,15 @@ function previewAccountSync(options = {}) {
   }
 }
 
+function parseSyncQuotaReceipt(rawOutput) {
+  const m = String(rawOutput || '').match(/^Quota sync:\s*([a-z_]+)(?:\s*\(([^)]*)\))?/m);
+  if (!m) return null;
+  return {
+    status: m[1],
+    detail: m[2] ? m[2].trim() : null,
+  };
+}
+
 async function executeAccountSync(options = {}) {
   if (options.confirm !== true) {
     return {
@@ -526,14 +559,34 @@ async function executeAccountSync(options = {}) {
   try {
     const stdout = execFileSync('/bin/zsh', [scriptPath], {
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: 35_000,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const refreshed = await refreshQuotaNow({ rootDir: options.rootDir }).catch(() => null);
+    // Single post-Sync refresh invariant: if agy-sync-keychain.sh emitted an explicit
+    // `Quota sync: <status>` receipt (other than `skipped`), it already executed or
+    // intentionally fenced the single refresh attempt — never double-fire another one.
+    const quotaReceipt = parseSyncQuotaReceipt(stdout);
+    let refreshed = null;
+    if (!quotaReceipt || quotaReceipt.status === 'skipped') {
+      try {
+        const liveAuth = inspectLiveAuth({ rootDir: options.rootDir, persistState: false });
+        if (liveAuth.loggedIn && !liveAuth.expired) {
+          const runRefresh = options.quotaRefresher || ((opts) => refreshQuotaNow(opts));
+          refreshed = await runRefresh({
+            roots: options.rootDir ? [options.rootDir] : undefined,
+            expectedEmail: liveAuth.activeEmail || null,
+          }).catch(() => null);
+        }
+      } catch {
+        refreshed = null;
+      }
+    }
     return {
       ok: true,
       error: null,
       output: stdout.trim(),
+      quotaSyncStatus: quotaReceipt ? quotaReceipt.status : (refreshed?.ok ? 'refreshed' : 'fallback_attempted'),
+      quotaSyncDetail: quotaReceipt?.detail || null,
       refreshedQuota: refreshed,
     };
   } catch (err) {
@@ -558,6 +611,7 @@ module.exports = {
   detectRunningAgySessions,
   resolveSyncScriptPath,
   parseSyncDryRunOutput,
+  parseSyncQuotaReceipt,
   previewAccountSync,
   executeAccountSync,
 };

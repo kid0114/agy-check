@@ -1,12 +1,18 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import {
   quotaModule,
   CACHE_PATH,
   withCacheFile,
 } from './_helpers/quota-test-utils.mjs';
+
+const require = createRequire(import.meta.url);
+const cacheMod = require('../../runtime/quota/cache.js');
+const { canPersistPassiveQuota } = require('../../runtime/session-snapshot.js');
 
 const {
   isCachePayloadFresh,
@@ -442,6 +448,219 @@ describe('quota / cache', () => {
       } finally {
         if (previousCache === null) fs.rmSync(CACHE_PATH, { force: true });
         else fs.writeFileSync(CACHE_PATH, previousCache);
+      }
+    });
+  });
+
+  describe('concurrency fencing & passive provenance', () => {
+    test('canPersistPassiveQuota requires positive post-switch or same-PID provenance', () => {
+      const liveToken = { accessToken: 'ya29.active', email: 'b@example.com' };
+      const switchedAt = 100_000;
+
+      // Missing ancestor agy process -> fail-closed
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: null,
+        switchedAt,
+      }), false);
+
+      // Process launched before switch -> fail-closed even if accountDrift was null
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: { pid: 1234, startedAtMs: switchedAt - 1000 },
+        switchedAt,
+      }), false);
+
+      // Process launched strictly after switch -> allowed (even if old snapshot had old PID/email)
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: { pid: 5678, startedAtMs: switchedAt + 5000 },
+        existingSnapshot: { agyPid: 1234, sessionAccountEmail: 'a@example.com' },
+        switchedAt,
+      }), true);
+
+      // Same PID already bound to A -> blocked even if timestamp looks newer
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: { pid: 1234, startedAtMs: switchedAt + 5000 },
+        existingSnapshot: { agyPid: 1234, sessionAccountEmail: 'a@example.com' },
+        switchedAt,
+      }), false);
+
+      // No switch history: unknown process rejected, same-PID matching snapshot allowed
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: { pid: 5678, startedAtMs: 50_000 },
+        existingSnapshot: null,
+        switchedAt: null,
+      }), false);
+
+      assert.equal(canPersistPassiveQuota({
+        convId: 'conv-1',
+        activeEmail: 'b@example.com',
+        liveToken,
+        accountDrift: null,
+        agyProcess: { pid: 5678, startedAtMs: 50_000 },
+        existingSnapshot: { agyPid: 5678, sessionAccountEmail: 'b@example.com' },
+        switchedAt: null,
+      }), true);
+    });
+
+    test('persistStdinProviderQuota skips silently when cache lock is held or beforeCommit fences it', () => {
+      const previousCache = fs.existsSync(CACHE_PATH) ? fs.readFileSync(CACHE_PATH, 'utf8') : null;
+      const tmpLock = path.join(os.tmpdir(), `agy-cache-lock-test-${process.pid}-${Date.now()}.lock`);
+      try {
+        fs.rmSync(CACHE_PATH, { force: true });
+        const tok = { accessToken: 'ya29.tok', email: 'b@example.com', expiry: new Date(Date.now() + 3600_000).toISOString() };
+        const pq = { claude: { weekly: { remainingFraction: 1, resetTime: null } } };
+
+        // Live lock held -> non-blocking skip
+        fs.writeFileSync(tmpLock, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+        assert.equal(cacheMod.persistStdinProviderQuota({
+          stdinProviderQuota: pq,
+          token: tok,
+          accountEmail: 'b@example.com',
+          lockPath: tmpLock,
+        }), false);
+        assert.equal(fs.existsSync(CACHE_PATH), false);
+
+        // Lock released, but beforeCommit returns false -> fenced without writing cache
+        fs.rmSync(tmpLock, { force: true });
+        assert.equal(cacheMod.persistStdinProviderQuota({
+          stdinProviderQuota: pq,
+          token: tok,
+          accountEmail: 'b@example.com',
+          lockPath: tmpLock,
+          beforeCommit: () => false,
+        }), false);
+        assert.equal(fs.existsSync(CACHE_PATH), false);
+
+        // Uncontested + beforeCommit true -> persists cleanly and deduplicates immediate repeat
+        assert.equal(cacheMod.persistStdinProviderQuota({
+          stdinProviderQuota: pq,
+          token: tok,
+          accountEmail: 'b@example.com',
+          lockPath: tmpLock,
+          beforeCommit: () => true,
+        }), true);
+        assert.equal(cacheMod.persistStdinProviderQuota({
+          stdinProviderQuota: pq,
+          token: tok,
+          accountEmail: 'b@example.com',
+          lockPath: tmpLock,
+          beforeCommit: () => true,
+        }), false);
+      } finally {
+        fs.rmSync(tmpLock, { force: true });
+        if (previousCache === null) fs.rmSync(CACHE_PATH, { force: true });
+        else fs.writeFileSync(CACHE_PATH, previousCache);
+      }
+    });
+
+    test('refreshQuotaNow aborts cache commit when commitFence flips false mid-flight', async () => {
+      let current = true;
+      let cacheWrites = 0;
+      const res = await quotaModule.refreshQuotaNow({
+        tokenSnapshot: {
+          accessToken: 'ya29.snap-a',
+          email: 'a@example.com',
+          expiry: new Date(Date.now() + 3600_000).toISOString(),
+        },
+        expectedEmail: 'a@example.com',
+        commitFence: () => current,
+        quotaFetcher: async () => {
+          // Simulate account switch happening while HTTP request is in flight
+          current = false;
+          return [{ id: 'gemini-2.5-pro', remainingFraction: 0.7, resetTime: new Date(Date.now() + 3600_000).toISOString() }];
+        },
+        tierFetcher: async () => 'Google AI Pro',
+        emailFetcher: async () => 'a@example.com',
+        cacheWriter: () => { cacheWrites += 1; },
+      });
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'superseded');
+      assert.equal(cacheWrites, 0, 'Superseded refresh must not commit to quota cache');
+    });
+
+    test('refreshQuotaNow default ABA fence rejects commit when vault activationGen changes mid-flight', async () => {
+      const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-aba-fence-'));
+      const metaPath = path.join(tmpRoot, 'agy-check-vault-meta.json');
+      try {
+        fs.writeFileSync(metaPath, JSON.stringify({ version: 1, activationGen: 2, accounts: {} }), { mode: 0o600 });
+        let cacheWrites = 0;
+        const res = await quotaModule.refreshQuotaNow({
+          roots: [tmpRoot],
+          tokenReader: () => ({
+            accessToken: 'ya29.snap-a',
+            email: 'a@example.com',
+            expiry: new Date(Date.now() + 3600_000).toISOString(),
+          }),
+          quotaFetcher: async () => {
+            // Simulate A -> B -> A switch incrementing activationGen from 2 -> 4
+            fs.writeFileSync(metaPath, JSON.stringify({ version: 1, activationGen: 4, accounts: {} }), { mode: 0o600 });
+            return [{ id: 'gemini-2.5-pro', remainingFraction: 0.9, resetTime: new Date(Date.now() + 3600_000).toISOString() }];
+          },
+          tierFetcher: async () => 'Google AI Pro',
+          emailFetcher: async () => 'a@example.com',
+          cacheWriter: () => { cacheWrites += 1; },
+        });
+        assert.equal(res.ok, false);
+        assert.equal(res.reason, 'superseded');
+        assert.equal(cacheWrites, 0);
+      } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+      }
+    });
+
+    test('withCacheLock never steals a live PID lock, reclaims dead PID locks safely, and fails closed on errors', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-lock-safety-'));
+      const lockPath = path.join(tmpDir, 'cache.lock');
+      try {
+        // 1. Old mtime (>10s) with LIVE pid -> must NOT be stolen
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'live-holder', at: Date.now() - 60_000 }), { mode: 0o600 });
+        const oldSec = (Date.now() - 60_000) / 1000;
+        fs.utimesSync(lockPath, oldSec, oldSec);
+        let ran = false;
+        const stolen = cacheMod.withCacheLock(() => { ran = true; return true; }, { blocking: false, lockPath });
+        assert.equal(stolen.acquired, false, 'Live holder lock must never be stolen by age');
+        assert.equal(ran, false);
+        assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'live-holder');
+
+        // 2. Dead PID lock -> safely reclaimed via .reclaim guard
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999, token: 'dead-holder', at: Date.now() - 1000 }), { mode: 0o600 });
+        const reclaimed = cacheMod.withCacheLock(() => { ran = true; return 'ok'; }, { blocking: false, lockPath });
+        assert.equal(reclaimed.acquired, true);
+        assert.equal(reclaimed.value, 'ok');
+        assert.equal(ran, true);
+        assert.equal(fs.existsSync(lockPath), false, 'Lock released after owner completes');
+
+        // 3. Non-EEXIST error (parent path is a regular file) -> fail-closed, never run unlocked
+        const blockingFile = path.join(tmpDir, 'not-a-dir');
+        fs.writeFileSync(blockingFile, 'x');
+        let unlockedRan = false;
+        const bad = cacheMod.withCacheLock(() => { unlockedRan = true; return true; }, {
+          blocking: false,
+          lockPath: path.join(blockingFile, 'nested.lock'),
+        });
+        assert.equal(bad.acquired, false);
+        assert.equal(unlockedRan, false);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });

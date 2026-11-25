@@ -18,9 +18,11 @@ const {
   readSessionSnapshot,
   findAncestorAgyProcess,
   evaluateAccountDrift,
+  canPersistPassiveQuota,
   writeSessionSnapshot,
 } = require('../session-snapshot.js');
-const { inspectLiveAuth } = require('../account-sync.js');
+const { inspectLiveAuth, readAccountState } = require('../account-sync.js');
+const { readVaultMeta } = require('../account-vault.js');
 
 async function handleSelfUpdate() {
   console.log('Checking for latest installer...');
@@ -197,6 +199,42 @@ async function main() {
         if (Array.isArray(effectiveQuotaData)) {
           effectiveQuotaData = enrichModelsWithQuotaSummary(effectiveQuotaData, stdinProviderQuota);
           effectiveQuotaData.providerQuota = { ...(quotaData.providerQuota || {}), ...stdinProviderQuota };
+        }
+        // Zero-request passive sync: persist official agy stdin quota ONLY when
+        // the invoking agy process has positive provenance for activeEmail and
+        // live activation state still matches inside the cache lock.
+        if (liveToken && activeEmail) {
+          try {
+            const vaultMeta = readVaultMeta();
+            const proven = canPersistPassiveQuota({
+              convId,
+              activeEmail,
+              liveToken,
+              accountDrift,
+              agyProcess,
+              existingSnapshot,
+              switchedAt: liveAuth.switchedAt,
+              lastActivationAt: vaultMeta.lastActivationAt,
+            });
+            if (proven) {
+              const { persistStdinProviderQuota } = require('../quota/cache.js');
+              persistStdinProviderQuota({
+                stdinProviderQuota,
+                models: Array.isArray(effectiveQuotaData) ? effectiveQuotaData : [],
+                token: liveToken,
+                tier: tierName || agyData?.plan_tier || null,
+                accountEmail: activeEmail,
+                beforeCommit: () => {
+                  const curMeta = readVaultMeta();
+                  if (curMeta.activationGen !== vaultMeta.activationGen) return false;
+                  const curState = readAccountState();
+                  if (curState?.activeEmail && curState.activeEmail !== activeEmail) return false;
+                  if (typeof curState?.switchedAt === 'number' && curState.switchedAt !== liveAuth.switchedAt) return false;
+                  return true;
+                },
+              });
+            }
+          } catch {}
         }
       }
 

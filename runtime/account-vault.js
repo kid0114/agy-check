@@ -16,7 +16,7 @@ const {
   normalizeExpiryDate,
   clearTokenTemp,
 } = require('./quota/token.js');
-const { getTokenHash } = require('./quota/cache.js');
+const { getTokenHash, withCacheLock } = require('./quota/cache.js');
 const { readAccountState, writeAccountState } = require('./account-sync.js');
 const { refreshQuotaNow } = require('./quota.js');
 
@@ -342,12 +342,17 @@ function readVaultMeta(rootDir = null) {
           authMethod: typeof v.authMethod === 'string' ? v.authMethod : null,
         };
       }
-      return { version: 1, accounts: cleaned };
+      return {
+        version: 1,
+        activationGen: Number.isInteger(raw.activationGen) && raw.activationGen >= 0 ? raw.activationGen : 0,
+        lastActivationAt: typeof raw.lastActivationAt === 'number' && Number.isFinite(raw.lastActivationAt) ? raw.lastActivationAt : null,
+        accounts: cleaned,
+      };
     }
   } catch {
     // No metadata file yet
   }
-  return { version: 1, accounts: {} };
+  return { version: 1, activationGen: 0, lastActivationAt: null, accounts: {} };
 }
 
 function writeVaultMeta(meta, rootDir = null) {
@@ -356,7 +361,13 @@ function writeVaultMeta(meta, rootDir = null) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch {}
   const tmpPath = `${metaPath}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const payload = JSON.stringify({ version: 1, updatedAt: Date.now(), accounts: meta.accounts || {} }, null, 2);
+  const payload = JSON.stringify({
+    version: 1,
+    updatedAt: Date.now(),
+    activationGen: Number.isInteger(meta.activationGen) && meta.activationGen >= 0 ? meta.activationGen : 0,
+    lastActivationAt: typeof meta.lastActivationAt === 'number' && Number.isFinite(meta.lastActivationAt) ? meta.lastActivationAt : null,
+    accounts: meta.accounts || {},
+  }, null, 2);
   try {
     fs.writeFileSync(tmpPath, payload, { mode: 0o600 });
     fs.chmodSync(tmpPath, 0o600);
@@ -366,6 +377,46 @@ function writeVaultMeta(meta, rootDir = null) {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw err;
   }
+}
+
+/**
+ * Extracts a private in-memory token snapshot from a verified raw credential blob
+ * for binding a fenced quota request. Never return this object in HTTP/CLI payloads.
+ */
+function extractTokenSnapshot(raw) {
+  const decoded = decodeKeyringRaw(String(raw || '').trim());
+  if (!decoded || typeof decoded !== 'object') return null;
+  const inner = (decoded.token && typeof decoded.token === 'object') ? decoded.token : decoded;
+  const accessToken = typeof inner.access_token === 'string' && inner.access_token.trim()
+    ? inner.access_token.trim()
+    : null;
+  if (!accessToken) return null;
+  const rawEmail = (typeof decoded.id_token_email === 'string' && decoded.id_token_email.includes('@'))
+    ? decoded.id_token_email
+    : ((typeof decoded.email === 'string' && decoded.email.includes('@'))
+      ? decoded.email
+      : extractEmailFromIdToken(decoded.id_token || inner.id_token));
+  const email = normalizeEmail(rawEmail);
+  const expiry = normalizeExpiryDate(inner.expiry || inner.expiry_date || decoded.expiry || decoded.expiry_date) || null;
+  return {
+    accessToken,
+    email,
+    expiry,
+    sourceFormat: 'vault-switch',
+  };
+}
+
+function isActivationCurrent({ rootDir = null, store, expectedEmail, expectedGen = null, nowFn = () => Date.now() }) {
+  if (Number.isInteger(expectedGen)) {
+    const meta = readVaultMeta(rootDir);
+    if (meta.activationGen !== expectedGen) return false;
+  }
+  const liveRes = store.readRaw(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+  if (liveRes.status !== 'ok') return false;
+  const liveParsed = parseCredentialBlob(liveRes.raw, nowFn());
+  if (!liveParsed.ok || liveParsed.expired) return false;
+  if (expectedEmail && liveParsed.email !== expectedEmail) return false;
+  return true;
 }
 
 function isPidAlive(pid) {
@@ -462,15 +513,20 @@ function shouldUpdateVaultSlot(existingMeta, incomingParsed, { force = false } =
 
 function clearLocalTokenCaches(rootDir = null) {
   const baseDir = rootDir || resolveAntigravityPath('');
-  const files = [
-    path.join(baseDir, ANTIGRAVITY_TOKEN_FILENAME),
-    path.join(baseDir, 'agy-hud-quota-cache.json'),
-  ];
-  for (const f of files) {
+  const tokenFile = path.join(baseDir, ANTIGRAVITY_TOKEN_FILENAME);
+  const cacheFile = path.join(baseDir, 'agy-hud-quota-cache.json');
+  const cacheLockPath = `${cacheFile}.lock`;
+  try {
+    if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile);
+  } catch {}
+  // Strict lock hierarchy: Vault Lock -> Cache Lock. Removing the shared quota
+  // cache under Cache Lock (after activationGen has already been committed) makes
+  // concurrent cache commits either finish before deletion or abort at beforeCommit().
+  withCacheLock(() => {
     try {
-      if (fs.existsSync(f)) fs.unlinkSync(f);
+      if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
     } catch {}
-  }
+  }, { blocking: true, waitMs: 500, lockPath: cacheLockPath });
   clearTokenTemp([baseDir]);
 }
 
@@ -538,13 +594,15 @@ function getVaultStatus(options = {}) {
 }
 
 async function saveCurrentAccount(options = {}) {
-  const { rootDir = null, label = null, force = false, now = Date.now() } = options;
+  const { rootDir = null, label = null, force = false } = options;
+  const nowProvided = typeof options.now === 'number';
   const store = getPlatformStore(options);
   if (!store.supported) {
     return { ok: false, status: 501, error: store.reason || 'Credential vault is not supported on this platform' };
   }
 
   return withVaultLock(rootDir, async () => {
+    const now = nowProvided ? options.now : Date.now();
     const liveRes = store.readRaw(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
     if (liveRes.status === 'missing') {
       return { ok: false, status: 404, error: 'No active agy login found in system keyring. Sign in via agy first.' };
@@ -613,11 +671,11 @@ async function saveCurrentAccount(options = {}) {
 async function switchSavedAccount(targetEmailRaw, options = {}) {
   const {
     rootDir = null,
-    now = Date.now(),
     refreshQuota = true,
     quotaRefresher = null,
     clearCaches = true,
   } = options;
+  const nowProvided = typeof options.now === 'number';
   const store = getPlatformStore(options);
   if (!store.supported) {
     return { ok: false, status: 501, error: store.reason || 'Credential vault is not supported on this platform' };
@@ -628,7 +686,10 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
     return { ok: false, status: 400, error: 'Valid target email is required.' };
   }
 
-  return withVaultLock(rootDir, async () => {
+  let capturedSnapshot = null;
+  let capturedTokenHash = null;
+  const switchResult = await withVaultLock(rootDir, async () => {
+    const now = nowProvided ? options.now : Date.now();
     const meta = readVaultMeta(rootDir);
     const targetMeta = meta.accounts[targetEmail];
     if (!targetMeta) {
@@ -672,8 +733,10 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
             previousEmail,
             canUndo: false,
             expired: liveParsed.expired,
+            hasRefreshToken: liveParsed.hasRefreshToken,
             refreshNeeded: liveParsed.expired,
             quotaRefreshed: false,
+            activationGen: meta.activationGen || 0,
           };
         }
         const prevSlot = meta.accounts[liveParsed.email];
@@ -716,15 +779,15 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
       };
     }
 
-    // 3. Clear stale disk token & single-account quota caches so Keychain is single source of truth.
-    if (clearCaches) {
-      clearLocalTokenCaches(rootDir);
-    }
-
-    // 4. Update vault metadata & account-switch state atomically.
+    // 3. Advance monotonic activation generation & persist metadata/account-state under lock
+    //    BEFORE clearing the quota cache under Cache Lock so concurrent cache writers either
+    //    finish before deletion or observe the new activationGen inside beforeCommit().
+    const commitNow = nowProvided ? options.now : Date.now();
+    meta.activationGen = (Number.isInteger(meta.activationGen) ? meta.activationGen : 0) + 1;
+    meta.lastActivationAt = commitNow;
     meta.accounts[targetEmail] = {
       ...targetMeta,
-      lastSwitchedAt: now,
+      lastSwitchedAt: commitNow,
       expiry: targetParsed.expiry,
       expiryMs: targetParsed.expiryMs,
       hasRefreshToken: targetParsed.hasRefreshToken,
@@ -739,7 +802,7 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
     history.unshift({
       email: targetEmail,
       previousEmail,
-      observedAt: now,
+      observedAt: commitNow,
       switched: Boolean(previousEmail && previousEmail !== targetEmail),
       via: 'panel-vault',
     });
@@ -747,22 +810,18 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
       version: 1,
       activeEmail: targetEmail,
       tokenHash: targetParsed.tokenHash,
-      switchedAt: now,
-      updatedAt: now,
+      switchedAt: commitNow,
+      updatedAt: commitNow,
       history: history.slice(0, 20),
     }, rootDir);
 
-    // 5. Refresh live quota immediately only if target access_token is not expired (Path A).
-    let quotaRefreshed = false;
-    if (refreshQuota && !targetParsed.expired) {
-      try {
-        const runRefresh = quotaRefresher || (() => refreshQuotaNow({ roots: rootDir ? [rootDir] : undefined }));
-        const qRes = await runRefresh();
-        quotaRefreshed = Boolean(qRes && !qRes.error);
-      } catch {
-        quotaRefreshed = false;
-      }
+    // 4. Clear stale disk token & single-account quota caches under Cache Lock.
+    if (clearCaches) {
+      clearLocalTokenCaches(rootDir);
     }
+
+    capturedSnapshot = extractTokenSnapshot(targetParsed.raw);
+    capturedTokenHash = targetParsed.tokenHash;
 
     return {
       ok: true,
@@ -774,10 +833,338 @@ async function switchSavedAccount(targetEmailRaw, options = {}) {
       backupSkippedReason,
       expiry: targetParsed.expiry,
       expired: targetParsed.expired,
+      hasRefreshToken: targetParsed.hasRefreshToken,
       refreshNeeded: targetParsed.expired,
-      quotaRefreshed,
+      quotaRefreshed: false,
+      activationGen: meta.activationGen,
     };
   });
+
+  if (!switchResult.ok || switchResult.alreadyActive) {
+    return switchResult;
+  }
+
+  // 5. Refresh live quota outside the vault lock when target access_token is fresh (Path A),
+  //    bound to the captured credential snapshot and fenced against activationGen/live slot.
+  if (refreshQuota && !switchResult.expired) {
+    const commitFence = () => isActivationCurrent({
+      rootDir,
+      store,
+      expectedEmail: targetEmail,
+      expectedGen: switchResult.activationGen,
+      nowFn: () => (nowProvided ? options.now : Date.now()),
+    });
+    if (commitFence()) {
+      try {
+        const refreshCtx = {
+          roots: rootDir ? [rootDir] : undefined,
+          tokenSnapshot: capturedSnapshot,
+          expectedEmail: targetEmail,
+          expectedTokenHash: capturedTokenHash,
+          activationGen: switchResult.activationGen,
+          commitFence,
+        };
+        const runRefresh = quotaRefresher
+          ? () => quotaRefresher(refreshCtx)
+          : () => refreshQuotaNow(refreshCtx);
+        const qRes = await runRefresh();
+        switchResult.quotaRefreshed = Boolean(qRes && qRes.ok !== false && !qRes.error && commitFence());
+      } catch {
+        switchResult.quotaRefreshed = false;
+      }
+    }
+  }
+
+  return switchResult;
+}
+
+function runAgyModelsRefresh(options = {}) {
+  const agyBin = options.agyBin || process.env.AGY_BIN || 'agy';
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 8000;
+  const childEnv = { ...process.env };
+  delete childEnv.ANTIGRAVITY_LS_ADDRESS;
+  delete childEnv.ANTIGRAVITY_CSRF_TOKEN;
+  delete childEnv.ANTIGRAVITY_CONVERSATION_ID;
+  delete childEnv.ANTIGRAVITY_TRAJECTORY_ID;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let spawned = false;
+    let timedOut = false;
+    let lastError = null;
+    let killTimer = null;
+    let child;
+    const useProcessGroup = process.platform !== 'win32';
+    try {
+      child = spawn(agyBin, ['models'], {
+        stdio: 'ignore',
+        env: childEnv,
+        detached: useProcessGroup,
+        windowsHide: true,
+      });
+    } catch (err) {
+      resolve({ ok: false, exitCode: null, timedOut: false, error: err?.message || 'spawn_failed' });
+      return;
+    }
+
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(result);
+    };
+
+    const signalTree = (sig) => {
+      if (useProcessGroup && Number.isInteger(child.pid) && child.pid > 0) {
+        try {
+          process.kill(-child.pid, sig);
+          return;
+        } catch {}
+      }
+      try { child.kill(sig); } catch {}
+    };
+
+    const isGroupAlive = () => {
+      if (!useProcessGroup || !Number.isInteger(child.pid) || child.pid <= 0) return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (err) {
+        return Boolean(err && err.code === 'EPERM');
+      }
+    };
+
+    const waitForGroupDrain = (onDrained) => {
+      if (!isGroupAlive()) {
+        onDrained();
+        return;
+      }
+      const killDeadline = Date.now() + 500;
+      let escalated = false;
+      const poll = () => {
+        if (!isGroupAlive()) {
+          onDrained();
+          return;
+        }
+        if (!escalated && Date.now() >= killDeadline) {
+          escalated = true;
+          signalTree('SIGKILL');
+          setTimeout(onDrained, 100);
+          return;
+        }
+        setTimeout(poll, 40);
+      };
+      setTimeout(poll, 40);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      signalTree('SIGTERM');
+      killTimer = setTimeout(() => {
+        signalTree('SIGKILL');
+      }, 500);
+    }, timeoutMs);
+
+    child.once('spawn', () => {
+      spawned = true;
+    });
+    child.on('error', (err) => {
+      lastError = err?.message || 'child_error';
+      // Once spawned, wait strictly for 'close' so withVaultLock is NEVER released
+      // while the child process could still be alive and writing to Keychain.
+      if (!spawned && !child.pid) {
+        done({ ok: false, exitCode: null, timedOut, error: lastError });
+      }
+    });
+    // Always await child exit/reaping (and on timeout, full process-group teardown)
+    // BEFORE returning so withVaultLock is never released while any descendant could
+    // still write to the live keyring slot.
+    child.once('close', (code) => {
+      const finish = () => done({
+        ok: code === 0 && !timedOut,
+        exitCode: code,
+        timedOut,
+        error: timedOut ? 'timeout' : (code === 0 ? null : lastError),
+      });
+      if (timedOut && isGroupAlive()) {
+        waitForGroupDrain(finish);
+      } else {
+        finish();
+      }
+    });
+  });
+}
+
+/**
+ * Serialized post-switch refresh for an expired saved account (Switch-only path).
+ * Holds withVaultLock across the single 0-token `agy models` call and waits for
+ * full child exit before releasing the lock, preventing live Keychain clobbering
+ * against a subsequent Undo or Switch. Enforces `expectedGen` against ABA switches,
+ * persists verified-fresh blobs monotonically back to vault (including when already
+ * refreshed externally), and runs a single snapshot-bound, fenced quota refresh
+ * outside the lock.
+ */
+async function refreshExpiredActiveAccount(expectedEmailRaw, options = {}) {
+  const {
+    rootDir = null,
+    expectedGen = null,
+    refreshQuota = true,
+    quotaRefresher = null,
+    modelsRunner = runAgyModelsRefresh,
+    timeoutMs = 8000,
+    nowFn = () => Date.now(),
+  } = options;
+  const expectedEmail = normalizeEmail(expectedEmailRaw);
+  if (!expectedEmail) return { ok: false, skipped: 'invalid_email', quotaRefreshed: false };
+
+  const store = getPlatformStore(options);
+  if (!store.supported) return { ok: false, skipped: 'unsupported', quotaRefreshed: false };
+
+  let capturedSnapshot = null;
+  const lockOutcome = await withVaultLock(rootDir, async () => {
+    const t0 = nowFn();
+    let meta = readVaultMeta(rootDir);
+    if (Number.isInteger(expectedGen) && meta.activationGen !== expectedGen) {
+      return { ok: true, skipped: 'superseded_generation', refreshed: false, vaultUpdated: false, email: expectedEmail };
+    }
+
+    const beforeRes = store.readRaw(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+    if (beforeRes.status !== 'ok') return { ok: true, skipped: 'no_live_slot', refreshed: false, vaultUpdated: false };
+    const beforeParsed = parseCredentialBlob(beforeRes.raw, t0);
+    if (!beforeParsed.ok || beforeParsed.email !== expectedEmail) {
+      return { ok: true, skipped: 'superseded', refreshed: false, vaultUpdated: false };
+    }
+
+    let alreadyFresh = false;
+    let afterParsed = beforeParsed;
+    let t1 = t0;
+
+    if (beforeParsed.expired) {
+      if (!beforeParsed.hasRefreshToken) {
+        return { ok: false, skipped: 'no_refresh_token', refreshed: false, vaultUpdated: false, email: expectedEmail };
+      }
+      await modelsRunner({ agyBin: options.agyBin, timeoutMs });
+
+      // Re-read vault generation and live Keychain regardless of exit code.
+      t1 = nowFn();
+      meta = readVaultMeta(rootDir);
+      if (Number.isInteger(expectedGen) && meta.activationGen !== expectedGen) {
+        return { ok: true, refreshed: false, vaultUpdated: false, skipped: 'superseded_generation', email: expectedEmail };
+      }
+      const afterRes = store.readRaw(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+      if (afterRes.status !== 'ok') {
+        return { ok: true, refreshed: false, vaultUpdated: false, email: expectedEmail, reason: 'live_slot_missing' };
+      }
+      afterParsed = parseCredentialBlob(afterRes.raw, t1);
+      if (!afterParsed.ok || afterParsed.email !== expectedEmail) {
+        return { ok: true, refreshed: false, vaultUpdated: false, skipped: 'superseded_after_run' };
+      }
+      if (afterParsed.expired) {
+        return { ok: true, refreshed: false, vaultUpdated: false, email: expectedEmail, reason: 'still_expired' };
+      }
+    } else {
+      alreadyFresh = true;
+    }
+
+    // Shared verified-fresh persistence path (runs for both refreshed AND alreadyFresh
+    // so an externally refreshed token is monotonically persisted back into the vault).
+    const existing = meta.accounts[expectedEmail] || {
+      email: expectedEmail,
+      label: null,
+      savedAt: t1,
+      updatedAt: t1,
+      lastSwitchedAt: t1,
+    };
+    const mono = shouldUpdateVaultSlot(existing, afterParsed);
+    let vaultUpdated = false;
+    if (mono.allow) {
+      const existingVaultRes = store.readRaw(VAULT_SERVICE, expectedEmail);
+      const needsVaultWrite = existingVaultRes.status !== 'ok' || existingVaultRes.raw !== afterParsed.raw;
+      if (needsVaultWrite) {
+        const wRes = store.writeRaw(VAULT_SERVICE, expectedEmail, afterParsed.raw, { isLiveSlot: false });
+        if (wRes.ok) {
+          vaultUpdated = true;
+        }
+      }
+      // Only update vault-meta when the vault keyring entry actually matches afterParsed
+      // (never record unsaved credentials if store.writeRaw failed).
+      const vaultSynced = !needsVaultWrite || vaultUpdated;
+      if (vaultSynced && (vaultUpdated || existing.tokenHash !== afterParsed.tokenHash || existing.expiry !== afterParsed.expiry)) {
+        meta.accounts[expectedEmail] = {
+          ...existing,
+          updatedAt: t1,
+          expiry: afterParsed.expiry,
+          expiryMs: afterParsed.expiryMs,
+          hasRefreshToken: afterParsed.hasRefreshToken,
+          refreshTokenHash: afterParsed.refreshTokenHash,
+          tokenHash: afterParsed.tokenHash,
+          authMethod: afterParsed.authMethod,
+        };
+        writeVaultMeta(meta, rootDir);
+      }
+    }
+
+    const prevState = readAccountState(rootDir);
+    writeAccountState({
+      version: 1,
+      activeEmail: expectedEmail,
+      tokenHash: afterParsed.tokenHash,
+      switchedAt: prevState?.switchedAt || t1,
+      updatedAt: t1,
+      history: Array.isArray(prevState?.history) ? prevState.history.slice(0, 20) : [],
+    }, rootDir);
+
+    capturedSnapshot = extractTokenSnapshot(afterParsed.raw);
+
+    return {
+      ok: true,
+      refreshed: !alreadyFresh,
+      alreadyFresh,
+      vaultUpdated,
+      email: expectedEmail,
+      expiry: afterParsed.expiry,
+      tokenHash: afterParsed.tokenHash,
+      activationGen: meta.activationGen,
+    };
+  });
+
+  if (!lockOutcome.ok || (!lockOutcome.refreshed && !lockOutcome.alreadyFresh)) {
+    return { ...lockOutcome, quotaRefreshed: false };
+  }
+
+  let quotaRefreshed = false;
+  if (refreshQuota) {
+    const effectiveGen = Number.isInteger(expectedGen) ? expectedGen : lockOutcome.activationGen;
+    const commitFence = () => isActivationCurrent({
+      rootDir,
+      store,
+      expectedEmail,
+      expectedGen: effectiveGen,
+      nowFn,
+    });
+    if (commitFence()) {
+      try {
+        const refreshCtx = {
+          roots: rootDir ? [rootDir] : undefined,
+          tokenSnapshot: capturedSnapshot,
+          expectedEmail,
+          expectedTokenHash: lockOutcome.tokenHash,
+          activationGen: effectiveGen,
+          commitFence,
+        };
+        const runRefresh = quotaRefresher
+          ? () => quotaRefresher(refreshCtx)
+          : () => refreshQuotaNow(refreshCtx);
+        const qRes = await runRefresh();
+        quotaRefreshed = Boolean(qRes && qRes.ok !== false && !qRes.error && commitFence());
+      } catch {
+        quotaRefreshed = false;
+      }
+    }
+  }
+
+  return { ...lockOutcome, quotaRefreshed };
 }
 
 async function removeSavedAccount(targetEmailRaw, options = {}) {
@@ -847,20 +1234,22 @@ function launchAgySignInTerminal(options = {}) {
 async function prepareSignInNewAccount(options = {}) {
   const {
     rootDir = null,
-    now = Date.now(),
     launchTerminal = true,
   } = options;
+  const nowProvided = typeof options.now === 'number';
   const store = getPlatformStore(options);
   if (!store.supported) {
     return { ok: false, status: 501, error: store.reason || 'Credential vault is not supported on this platform' };
   }
 
   return withVaultLock(rootDir, async () => {
+    const now = nowProvided ? options.now : Date.now();
     const liveRes = store.readRaw(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
     if (liveRes.status === 'error') {
       return { ok: false, status: 500, error: `Could not read active agy login before sign-in: ${liveRes.error}` };
     }
 
+    const meta = readVaultMeta(rootDir);
     let backedUpEmail = null;
     if (liveRes.status === 'ok') {
       const parsed = parseCredentialBlob(liveRes.raw, now);
@@ -870,7 +1259,6 @@ async function prepareSignInNewAccount(options = {}) {
       if (!parsed.email) {
         return { ok: false, status: 422, error: 'Active agy login has no email; save or sign out manually first to avoid losing it.' };
       }
-      const meta = readVaultMeta(rootDir);
       const existing = meta.accounts[parsed.email] || null;
       const mono = shouldUpdateVaultSlot(existing, parsed);
       if (mono.allow) {
@@ -891,7 +1279,6 @@ async function prepareSignInNewAccount(options = {}) {
           tokenHash: parsed.tokenHash,
           authMethod: parsed.authMethod,
         };
-        writeVaultMeta(meta, rootDir);
       }
       backedUpEmail = parsed.email;
 
@@ -901,6 +1288,9 @@ async function prepareSignInNewAccount(options = {}) {
       }
     }
 
+    meta.activationGen = (Number.isInteger(meta.activationGen) ? meta.activationGen : 0) + 1;
+    meta.lastActivationAt = now;
+    writeVaultMeta(meta, rootDir);
     clearLocalTokenCaches(rootDir);
 
     const launchRes = launchTerminal ? launchAgySignInTerminal(options) : { launched: false, helper: null };
@@ -909,6 +1299,7 @@ async function prepareSignInNewAccount(options = {}) {
       backedUpEmail,
       launchedTerminal: Boolean(launchRes.launched),
       nextCommand: 'agy',
+      activationGen: meta.activationGen,
     };
   });
 }
@@ -933,6 +1324,8 @@ module.exports = {
   getVaultStatus,
   saveCurrentAccount,
   switchSavedAccount,
+  refreshExpiredActiveAccount,
+  runAgyModelsRefresh,
   removeSavedAccount,
   resolveOpenTerminalScript,
   prepareSignInNewAccount,

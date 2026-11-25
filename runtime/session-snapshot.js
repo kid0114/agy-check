@@ -174,6 +174,42 @@ function evaluateAccountDrift({
 }
 
 /**
+ * Fail-closed provenance gate for passively persisting agy stdin quota to shared
+ * disk cache. Requires positive proof that the invoking agy process belongs to
+ * `activeEmail` (not merely absence of detected drift), so an older window from
+ * account A can never label its quota as account B after a switch.
+ */
+function canPersistPassiveQuota({
+  convId = null,
+  activeEmail = null,
+  liveToken = null,
+  accountDrift = null,
+  agyProcess = null,
+  existingSnapshot = null,
+  switchedAt = null,
+  lastActivationAt = null,
+} = {}) {
+  if (!convId || !activeEmail || !liveToken || accountDrift) return false;
+  if (!agyProcess || !Number.isInteger(agyProcess.pid) || typeof agyProcess.startedAtMs !== 'number') {
+    return false;
+  }
+  const sameProcess = Boolean(existingSnapshot?.agyPid && existingSnapshot.agyPid === agyProcess.pid);
+  if (sameProcess && existingSnapshot?.sessionAccountEmail && existingSnapshot.sessionAccountEmail !== activeEmail) {
+    return false;
+  }
+  const latestSwitchAt = Math.max(
+    typeof switchedAt === 'number' && Number.isFinite(switchedAt) ? switchedAt : 0,
+    typeof lastActivationAt === 'number' && Number.isFinite(lastActivationAt) ? lastActivationAt : 0,
+  );
+  if (latestSwitchAt > 0) {
+    return agyProcess.startedAtMs > latestSwitchAt + 2000;
+  }
+  // When no switch has ever been recorded, require an existing same-PID binding
+  // to activeEmail so an unknown pre-existing process cannot poison a fresh cache.
+  return Boolean(sameProcess && existingSnapshot?.sessionAccountEmail === activeEmail);
+}
+
+/**
  * Atomically persists a lightweight per-session snapshot for panel aggregation.
  * Never throws so statusLine rendering remains non-blocking.
  */
@@ -245,5 +281,6 @@ module.exports = {
   readAllSessionSnapshots,
   findAncestorAgyProcess,
   evaluateAccountDrift,
+  canPersistPassiveQuota,
   writeSessionSnapshot,
 };

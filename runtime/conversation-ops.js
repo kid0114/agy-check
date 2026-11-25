@@ -372,6 +372,28 @@ async function closeAgyProcess(pid, depsIn = {}) {
     }
     return !deps.isPidAlive(pid);
   };
+
+  // If this agy PID is supervised by an agy-check managed launcher, stop it
+  // via the launcher so it never restarts and reaps the child without touching
+  // any unowned parent shell.
+  if (depsIn.useManaged !== false) {
+    try {
+      const ml = require('./managed-launcher.js');
+      const managedRoot = depsIn.rootDir || null;
+      const managed = await ml.findManagedSessionByChildPid(pid, { rootDir: managedRoot, verify: false });
+      if (managed) {
+        const stopRes = await ml.sendManagedCommand(managed.sessionId, 'stop', {}, {
+          rootDir: managedRoot,
+          timeoutMs: deps.termWaitMs + deps.killWaitMs + 2000,
+        });
+        if (stopRes && stopRes.ok && await waitExit(Math.min(2000, deps.termWaitMs))) {
+          return { ok: true, pid, via: 'managed-stop', sessionId: managed.sessionId };
+        }
+      }
+    } catch {
+      // Fall back to direct PID termination below.
+    }
+  }
   try {
     deps.kill(pid, 'SIGTERM');
   } catch (err) {
@@ -487,7 +509,7 @@ async function deleteConversations(ids, options = {}) {
 
   const closedPids = [];
   for (const pid of pidsToClose) {
-    const res = await closeAgyProcess(pid, deps);
+    const res = await closeAgyProcess(pid, { ...deps, rootDir: baseDir });
     if (!res.ok) {
       return { ok: false, status: 500, error: res.error || `Could not close agy window PID ${pid}`, closedPids };
     }

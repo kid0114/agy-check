@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const vault = require('../../runtime/account-vault.js');
 const { createPanelServer } = require('../../runtime/panel-server.js');
+const { parseSyncQuotaReceipt, executeAccountSync } = require('../../runtime/account-sync.js');
 const { KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, ANTIGRAVITY_TOKEN_FILENAME } = require('../../runtime/quota/token.js');
 
 function makeTempRoot() {
@@ -472,6 +473,372 @@ test('panel server enforces strict local capability token, rejects forwarded pro
     assert.equal(signInRes.text.includes('1//'), false);
   } finally {
     await panel.close();
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('refreshExpiredActiveAccount serializes under vault lock, updates vault on refresh, and respects skipBackgroundRefresh', async () => {
+  const rootDir = makeTempRoot();
+  const now = Date.now();
+  const blobBExpired = makeBlob({
+    email: 'b@example.com',
+    accessToken: 'ya29.b-old',
+    expiry: new Date(now - 3600_000).toISOString(),
+  });
+  const blobBFresh = makeBlob({
+    email: 'b@example.com',
+    accessToken: 'ya29.b-new',
+    expiry: new Date(now + 3500_000).toISOString(),
+  });
+  const blobAFresh = makeBlob({
+    email: 'a@example.com',
+    accessToken: 'ya29.a-live',
+    expiry: new Date(now + 3500_000).toISOString(),
+  });
+  const store = makeMemoryStore({
+    [`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`]: blobBExpired,
+  });
+
+  try {
+    // Seed vault with B (expired) and A (fresh)
+    await vault.saveCurrentAccount({ rootDir, store, now });
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobAFresh);
+    await vault.saveCurrentAccount({ rootDir, store, now });
+
+    // Switch back to expired B
+    const swB = await vault.switchSavedAccount('b@example.com', { rootDir, store, now, refreshQuota: false });
+    assert.equal(swB.ok, true);
+    assert.equal(swB.refreshNeeded, true);
+    assert.equal(swB.hasRefreshToken, true);
+
+    // 1. If agy models does NOT persist a refreshed token, skip quotaRefresher cleanly
+    let quotaCalls = 0;
+    const noPersist = await vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store,
+      nowFn: () => now,
+      modelsRunner: async () => ({ ok: true, exitCode: 0 }),
+      quotaRefresher: async () => { quotaCalls += 1; return { ok: true }; },
+    });
+    assert.equal(noPersist.ok, true);
+    assert.equal(noPersist.refreshed, false);
+    assert.equal(noPersist.quotaRefreshed, false);
+    assert.equal(quotaCalls, 0);
+
+    // 2. If agy models refreshes Keychain while holding withVaultLock, a concurrent Undo
+    // queues until modelsRunner completes, vault gets refreshed B, and quota fetch is fenced!
+    let releaseModels;
+    const modelsStarted = new Promise(r => { releaseModels = r; });
+    let finishModels;
+    const modelsGate = new Promise(r => { finishModels = r; });
+    const events = [];
+
+    const refreshJob = vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store,
+      nowFn: () => now,
+      modelsRunner: async () => {
+        events.push('models_start');
+        releaseModels();
+        await modelsGate;
+        store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBFresh);
+        events.push('models_done');
+        return { ok: true, exitCode: 0 };
+      },
+      quotaRefresher: async () => {
+        events.push('quota_fetch');
+        quotaCalls += 1;
+        return { ok: true };
+      },
+    });
+
+    await modelsStarted;
+    // Trigger Undo (switch back to A) while modelsRunner holds withVaultLock
+    const undoPromise = vault.switchSavedAccount('a@example.com', { rootDir, store, now, refreshQuota: false })
+      .then((r) => { events.push('undo_done'); return r; });
+
+    await new Promise(r => setTimeout(r, 40));
+    assert.deepEqual(events, ['models_start'], 'Undo must queue while modelsRunner holds withVaultLock');
+
+    finishModels();
+    const [refRes, undoRes] = await Promise.all([refreshJob, undoPromise]);
+    assert.equal(refRes.ok, true);
+    assert.equal(refRes.refreshed, true);
+    assert.equal(undoRes.ok, true);
+    assert.equal(store.map.get(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`), blobAFresh, 'Undo A must not be clobbered by B');
+    assert.equal(store.map.get(`${vault.VAULT_SERVICE}:b@example.com`), blobBFresh, 'Refreshed B must be saved back to vault');
+    assert.equal(events.indexOf('models_done') < events.indexOf('undo_done'), true);
+
+    // 3. Normal uncontested refresh updates vault and invokes quotaRefresher exactly once
+    await vault.switchSavedAccount('b@example.com', { rootDir, store, now, refreshQuota: false });
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBExpired);
+    quotaCalls = 0;
+    const cleanRef = await vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store,
+      nowFn: () => now,
+      modelsRunner: async () => {
+        store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBFresh);
+        return { ok: true, exitCode: 0 };
+      },
+      quotaRefresher: async () => { quotaCalls += 1; return { ok: true }; },
+    });
+    assert.equal(cleanRef.ok, true);
+    assert.equal(cleanRef.refreshed, true);
+    assert.equal(cleanRef.quotaRefreshed, true);
+    assert.equal(quotaCalls, 1);
+
+    // 4. Panel server skips background expired refresh when skipBackgroundRefresh=true (Switch & sync)
+    //    and triggers it once when skipBackgroundRefresh is false (Switch only)
+    const bgCalls = [];
+    const panel = createPanelServer({
+      rootDir,
+      port: 0,
+      lan: false,
+      lsEndpoint: false,
+      vaultOptions: { store },
+      vaultSwitcher: async (email) => ({
+        ok: true,
+        alreadyActive: false,
+        email,
+        refreshNeeded: true,
+        hasRefreshToken: true,
+        quotaRefreshed: false,
+      }),
+      vaultExpiredRefresher: async (email) => {
+        bgCalls.push(email);
+        return { ok: true, refreshed: true, quotaRefreshed: true };
+      },
+      dataOptions: { runningSessions: [] },
+    });
+    const info = await panel.listen();
+    try {
+      const home = await httpRequest(info.port, 'GET', '/', { headers: { Host: `127.0.0.1:${info.port}` } });
+      const tok = home.text.match(/<meta name="agy-local-token" content="([^"]+)">/)[1];
+      const hdrs = {
+        Host: `127.0.0.1:${info.port}`,
+        Origin: `http://127.0.0.1:${info.port}`,
+        'X-Agy-Local-Token': tok,
+      };
+      await httpRequest(info.port, 'POST', '/api/accounts/switch', {
+        headers: hdrs,
+        body: { email: 'b@example.com', skipBackgroundRefresh: true },
+      });
+      await new Promise(r => setTimeout(r, 30));
+      assert.deepEqual(bgCalls, [], 'Switch & sync must skip competing agy models refresh');
+
+      await httpRequest(info.port, 'POST', '/api/accounts/switch', {
+        headers: hdrs,
+        body: { email: 'b@example.com', skipBackgroundRefresh: false },
+      });
+      await new Promise(r => setTimeout(r, 30));
+      assert.deepEqual(bgCalls, ['b@example.com'], 'Switch only on expired target triggers serialized refresh once');
+    } finally {
+      await panel.close();
+    }
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('activationGen ABA fencing, alreadyFresh vault write-back, Sync serialization, runAgyModelsRefresh lifecycle, and explicit Sync quota receipts', async () => {
+  const rootDir = makeTempRoot();
+  const now = Date.now();
+  const blobBExpired = makeBlob({
+    email: 'b@example.com',
+    accessToken: 'ya29.b-exp',
+    expiry: new Date(now - 3600_000).toISOString(),
+  });
+  const blobBFresh = makeBlob({
+    email: 'b@example.com',
+    accessToken: 'ya29.b-fresh-from-agy',
+    expiry: new Date(now + 3500_000).toISOString(),
+  });
+  const blobAFresh = makeBlob({
+    email: 'a@example.com',
+    accessToken: 'ya29.a-fresh',
+    expiry: new Date(now + 3500_000).toISOString(),
+  });
+  const store = makeMemoryStore({
+    [`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`]: blobBExpired,
+  });
+
+  try {
+    await vault.saveCurrentAccount({ rootDir, store, now });
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobAFresh);
+    await vault.saveCurrentAccount({ rootDir, store, now });
+
+    // 1. ABA protection via locked activationGen: B(gen=1) -> A(gen=2) -> B(gen=3)
+    const swB1 = await vault.switchSavedAccount('b@example.com', { rootDir, store, now, refreshQuota: false });
+    const swA2 = await vault.switchSavedAccount('a@example.com', { rootDir, store, now, refreshQuota: false });
+    const swB3 = await vault.switchSavedAccount('b@example.com', { rootDir, store, now, refreshQuota: false });
+    assert.equal(swB1.activationGen, 1);
+    assert.equal(swA2.activationGen, 2);
+    assert.equal(swB3.activationGen, 3);
+
+    let abaModelsCalls = 0;
+    let abaQuotaCalls = 0;
+    const staleJob = await vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store,
+      expectedGen: swB1.activationGen,
+      nowFn: () => now,
+      modelsRunner: async () => { abaModelsCalls += 1; return { ok: true, exitCode: 0 }; },
+      quotaRefresher: async () => { abaQuotaCalls += 1; return { ok: true }; },
+    });
+    assert.equal(staleJob.ok, true);
+    assert.equal(staleJob.skipped, 'superseded_generation');
+    assert.equal(abaModelsCalls, 0);
+    assert.equal(abaQuotaCalls, 0);
+
+    // 2. alreadyFresh branch skips modelsRunner YET still persists fresh live blob back into vault
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBFresh);
+    let alreadyFreshModelsCalls = 0;
+    let alreadyFreshQuotaCtx = null;
+    const alreadyFreshRes = await vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store,
+      expectedGen: swB3.activationGen,
+      nowFn: () => now,
+      modelsRunner: async () => { alreadyFreshModelsCalls += 1; return { ok: true, exitCode: 0 }; },
+      quotaRefresher: async (ctx) => { alreadyFreshQuotaCtx = ctx; return { ok: true }; },
+    });
+    assert.equal(alreadyFreshRes.ok, true);
+    assert.equal(alreadyFreshRes.alreadyFresh, true);
+    assert.equal(alreadyFreshRes.refreshed, false);
+    assert.equal(alreadyFreshRes.vaultUpdated, true);
+    assert.equal(alreadyFreshRes.quotaRefreshed, true);
+    assert.equal(alreadyFreshModelsCalls, 0, 'alreadyFresh must skip CLI invocation');
+    assert.equal(store.map.get(`${vault.VAULT_SERVICE}:b@example.com`), blobBFresh, 'alreadyFresh must still persist refreshed blob back into vault');
+    assert.equal(alreadyFreshQuotaCtx?.expectedEmail, 'b@example.com');
+    assert.equal(alreadyFreshQuotaCtx?.tokenSnapshot?.accessToken, 'ya29.b-fresh-from-agy');
+
+    // 2b. Failed vault writeRaw must NOT corrupt vault-meta with unsaved token metadata
+    const blobBFresh2 = makeBlob({
+      email: 'b@example.com',
+      accessToken: 'ya29.b-unsaved-token',
+      expiry: new Date(now + 7200_000).toISOString(),
+    });
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBFresh2);
+    const metaBeforeFail = vault.readVaultMeta(rootDir);
+    const failingStore = {
+      ...store,
+      writeRaw(service, account, raw, opts) {
+        if (service === vault.VAULT_SERVICE) return { ok: false, error: 'simulated keyring write failure' };
+        return store.writeRaw(service, account, raw, opts);
+      },
+    };
+    const failWriteRes = await vault.refreshExpiredActiveAccount('b@example.com', {
+      rootDir,
+      store: failingStore,
+      expectedGen: swB3.activationGen,
+      nowFn: () => now,
+      refreshQuota: false,
+    });
+    assert.equal(failWriteRes.ok, true);
+    assert.equal(failWriteRes.vaultUpdated, false);
+    const metaAfterFail = vault.readVaultMeta(rootDir);
+    assert.equal(
+      metaAfterFail.accounts['b@example.com'].tokenHash,
+      metaBeforeFail.accounts['b@example.com'].tokenHash,
+      'vault-meta must not record unsaved credentials when vault writeRaw fails',
+    );
+    store.map.set(`${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`, blobBFresh);
+
+    // 3. POST /api/sync/execute awaits an in-flight background expired-account refresh
+    const order = [];
+    let releaseRefresh;
+    const refreshGate = new Promise(r => { releaseRefresh = r; });
+    const panel = createPanelServer({
+      rootDir,
+      port: 0,
+      lan: false,
+      lsEndpoint: false,
+      vaultOptions: { store },
+      vaultSwitcher: async (email) => ({
+        ok: true,
+        alreadyActive: false,
+        email,
+        refreshNeeded: true,
+        hasRefreshToken: true,
+        quotaRefreshed: false,
+        activationGen: 3,
+      }),
+      vaultExpiredRefresher: async (_email, opts) => {
+        order.push(`bg_start:${opts?.expectedGen}`);
+        await refreshGate;
+        order.push('bg_done');
+        return { ok: true, refreshed: true, quotaRefreshed: true };
+      },
+      syncExecutor: async () => {
+        order.push('sync_exec');
+        return { ok: true, output: 'Quota sync: refreshed' };
+      },
+      dataOptions: { runningSessions: [] },
+    });
+    const info = await panel.listen();
+    try {
+      const home = await httpRequest(info.port, 'GET', '/', { headers: { Host: `127.0.0.1:${info.port}` } });
+      const tok = home.text.match(/<meta name="agy-local-token" content="([^"]+)">/)[1];
+      const hdrs = {
+        Host: `127.0.0.1:${info.port}`,
+        Origin: `http://127.0.0.1:${info.port}`,
+        'X-Agy-Local-Token': tok,
+      };
+      await httpRequest(info.port, 'POST', '/api/accounts/switch', {
+        headers: hdrs,
+        body: { email: 'b@example.com', skipBackgroundRefresh: false },
+      });
+      await new Promise(r => setTimeout(r, 20));
+      const syncPromise = httpRequest(info.port, 'POST', '/api/sync/execute', {
+        headers: hdrs,
+        body: { confirm: true },
+      });
+      await new Promise(r => setTimeout(r, 30));
+      assert.deepEqual(order, ['bg_start:3'], 'Sync must wait until in-flight background refresh completes');
+      releaseRefresh();
+      const syncRes = await syncPromise;
+      assert.equal(syncRes.status, 200);
+      assert.deepEqual(order, ['bg_start:3', 'bg_done', 'sync_exec']);
+    } finally {
+      await panel.close();
+    }
+
+    // 4. runAgyModelsRefresh handles ENOENT spawn failure cleanly and reaps timed-out process
+    const badBin = await vault.runAgyModelsRefresh({ agyBin: '/nonexistent/agy-binary-xyz', timeoutMs: 300 });
+    assert.equal(badBin.ok, false);
+    assert.equal(badBin.timedOut, false);
+
+    if (process.platform !== 'win32') {
+      const hangScript = path.join(rootDir, 'fake-agy-hang.sh');
+      fs.writeFileSync(hangScript, '#!/bin/sh\nsleep 10\n', { mode: 0o755 });
+      const timed = await vault.runAgyModelsRefresh({ agyBin: hangScript, timeoutMs: 120 });
+      assert.equal(timed.ok, false);
+      assert.equal(timed.timedOut, true);
+    }
+
+    // 5. Explicit post-Sync quota receipt prevents duplicate fallback refresh even on failure
+    assert.deepEqual(parseSyncQuotaReceipt('ok\nQuota sync: refreshed\n'), { status: 'refreshed', detail: null });
+    assert.deepEqual(parseSyncQuotaReceipt('Quota sync: failed (auth_failed)\n'), { status: 'failed', detail: 'auth_failed' });
+    assert.deepEqual(parseSyncQuotaReceipt('Quota sync: already_fresh'), { status: 'already_fresh', detail: null });
+    assert.equal(parseSyncQuotaReceipt('legacy output without receipt'), null);
+
+    if (process.platform !== 'win32') {
+      const fakeSync = path.join(rootDir, 'fake-sync-receipt.sh');
+      fs.writeFileSync(fakeSync, '#!/bin/zsh\necho "Quota sync: failed (network_error)"\n', { mode: 0o755 });
+      let fallbackRefreshCalls = 0;
+      const execRes = await executeAccountSync({
+        confirm: true,
+        scriptPath: fakeSync,
+        rootDir,
+        quotaRefresher: async () => { fallbackRefreshCalls += 1; return { ok: true }; },
+      });
+      assert.equal(execRes.ok, true);
+      assert.equal(execRes.quotaSyncStatus, 'failed');
+      assert.equal(execRes.quotaSyncDetail, 'network_error');
+      assert.equal(fallbackRefreshCalls, 0, 'executeAccountSync must NOT double-fire refresh when script emitted explicit receipt');
+    }
+  } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });

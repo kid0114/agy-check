@@ -252,6 +252,8 @@ function getHelpText() {
     '     [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]',
     '  session <id-prefix> [--json]       Inspect per-turn cache hit rate & miss diagnosis for one session',
     '  account [list|save|switch|sign-in|remove]  Manage saved agy credentials in OS keyring (local only)',
+    '  run [--owned-surface] [--] [agy args...]   Launch agy under cross-terminal managed supervisor (in-place restart)',
+    '  managed [list|replace|stop|close] [--json] Inspect or control managed agy sessions',
     '  sync [--apply]                     Preview (default --dry-run) or execute agy-sync-keychain.sh',
     '  config                             Launch the HUD configuration wizard',
     '  update                             Self-update agy-check runtime',
@@ -260,6 +262,58 @@ function getHelpText() {
 }
 
 async function runPanelCli(argv = process.argv.slice(2)) {
+  // Handle `agy-check run [--owned-surface] [--clear-on-replace] [--] [agy args...]`
+  // before generic flag parsing so agy flags (--conversation, --model, -r, -c, etc.) pass through intact.
+  if (argv[0] === 'run') {
+    const rest = argv.slice(1);
+    if (rest[0] === '-h' || rest[0] === '--help') {
+      process.stdout.write([
+        'Usage: agy-check run [--owned-surface] [--clear-on-replace] [--] [agy args...]',
+        '',
+        'Launches interactive `agy` under a lightweight foreground supervisor so account',
+        'syncs can restart `agy` in-place on the same terminal tab across any terminal emulator.',
+        '',
+        'Options:',
+        '  --owned-surface     Mark this tab as dedicated to agy (allows `close` to exit 0)',
+        '  --clear-on-replace  Clear screen before launching replacement agy instance',
+        '  --                  Pass all following arguments directly to agy',
+        '',
+      ].join('\n'));
+      return 0;
+    }
+    let ownedSurface = false;
+    let clearScreenOnReplace = false;
+    const agyArgs = [];
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--') {
+        agyArgs.push(...rest.slice(i + 1));
+        break;
+      }
+      if (a === '--owned-surface') {
+        ownedSurface = true;
+      } else if (a === '--clear-on-replace') {
+        clearScreenOnReplace = true;
+      } else {
+        agyArgs.push(a);
+      }
+    }
+    const { runManagedSession } = require('./managed-launcher.js');
+    try {
+      const res = await runManagedSession({
+        agyBin: process.env.AGY_BIN || 'agy',
+        agyArgs,
+        cwd: process.cwd(),
+        ownedSurface,
+        clearScreenOnReplace,
+      });
+      return Number.isInteger(res?.exitCode) ? res.exitCode : 0;
+    } catch (err) {
+      process.stderr.write(`Managed launcher failed: ${err && err.message ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
   const { command, args, flags } = parseCliArgs(argv);
 
   if (flags.help || command === 'help') {
@@ -546,6 +600,72 @@ async function runPanelCli(argv = process.argv.slice(2)) {
     }
 
     process.stderr.write('Usage: agy-check account [list|save|switch <email>|sign-in|remove <email>] [--json]\n');
+    return 1;
+  }
+
+  if (command === 'managed') {
+    const { listManagedSessions, sendManagedCommand } = require('./managed-launcher.js');
+    const sub = args[0] || 'list';
+
+    if (sub === 'list' || sub === 'ls') {
+      const sessions = await listManagedSessions({ verify: !flags['no-verify'] });
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify({ sessions }, null, 2)}\n`);
+        return 0;
+      }
+      if (sessions.length === 0) {
+        process.stdout.write('No live managed agy sessions.\n');
+        return 0;
+      }
+      for (const s of sessions) {
+        const surf = s.ownedSurface ? 'owned-tab' : 'shell';
+        const cid = s.conversationId ? s.conversationId.slice(0, 8) : '-';
+        process.stdout.write(`  ${s.sessionId}  child=${s.childPid}  launcher=${s.launcherPid}  ${surf}  conv=${cid}  cwd=${s.cwd}\n`);
+      }
+      return 0;
+    }
+
+    if (sub === 'replace' || sub === 'stop' || sub === 'close') {
+      const target = args[1];
+      if (!target) {
+        process.stderr.write(`Usage: agy-check managed ${sub} <session-id|child-pid>${sub === 'replace' ? ' [--conversation <uuid>] [--cwd <dir>] [--clear]' : ''} [--json]\n`);
+        return 1;
+      }
+      const payload = {};
+      if (sub === 'replace') {
+        if (typeof flags.conversation === 'string') payload.conversationId = flags.conversation;
+        if (typeof flags.cwd === 'string') payload.cwd = flags.cwd;
+        if (flags.clear) payload.clearScreen = true;
+      }
+      try {
+        const res = await sendManagedCommand(target, sub, payload);
+        if (flags.json) {
+          process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+          return res.ok ? 0 : 1;
+        }
+        if (!res.ok) {
+          process.stderr.write(`${res.error || `Managed ${sub} failed`}\n`);
+          return 1;
+        }
+        if (sub === 'replace') {
+          process.stdout.write(`Replaced managed session ${res.sessionId} in-place (child ${res.previousChildPid} -> ${res.childPid}).\n`);
+        } else if (sub === 'close') {
+          process.stdout.write(`Closed owned managed session ${res.sessionId} (stopped child ${res.stoppedChildPid}).\n`);
+        } else {
+          process.stdout.write(`Stopped managed session ${res.sessionId} (child ${res.stoppedChildPid}).\n`);
+        }
+        return 0;
+      } catch (err) {
+        if (flags.json) {
+          process.stdout.write(`${JSON.stringify({ ok: false, error: err.message }, null, 2)}\n`);
+        } else {
+          process.stderr.write(`${err.message}\n`);
+        }
+        return 1;
+      }
+    }
+
+    process.stderr.write('Usage: agy-check managed [list|replace <id|pid>|stop <id|pid>|close <id|pid>] [--json]\n');
     return 1;
   }
 

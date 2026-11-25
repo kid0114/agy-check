@@ -241,6 +241,44 @@ describe('conversation ops', () => {
     assert.equal((await ops.closeAgyProcess(process.pid, fastDeps())).ok, false);
   });
 
+  test('closeAgyProcess stops a managed launcher child cleanly via managed-stop without killing parent shell', async () => {
+    const ml = require('../../runtime/managed-launcher.js');
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ops-ml-'));
+    const socketDir = fs.mkdtempSync(path.join('/tmp', 'agy-ops-sock-'));
+    const fixture = path.join(rootDir, 'fake-agy.js');
+    fs.writeFileSync(fixture, 'setInterval(() => {}, 1000); process.on("SIGTERM", () => process.exit(0));\n');
+    let managed = null;
+    try {
+      let resolveReady;
+      const readyPromise = new Promise(r => { resolveReady = r; });
+      const runPromise = ml.runManagedSession({
+        agyBin: process.execPath,
+        agyArgs: [fixture],
+        cwd: rootDir,
+        ownedSurface: false,
+        rootDir,
+        socketDir,
+        stdio: 'pipe',
+        onReady(s) { managed = s; resolveReady(s); },
+      });
+      await readyPromise;
+      const res = await ops.closeAgyProcess(managed.childPid, fastDeps({
+        rootDir,
+        processCommand: () => 'agy --conversation=' + ID_A,
+      }));
+      assert.equal(res.ok, true);
+      assert.equal(res.via, 'managed-stop');
+      assert.equal(res.sessionId, managed.sessionId);
+      const runOut = await runPromise;
+      assert.equal(runOut.exitCode, 0);
+      assert.equal(runOut.reason, 'stopped');
+    } finally {
+      if (managed) await ml.sendManagedCommand(managed.sessionId, 'stop', {}, { rootDir }).catch(() => {});
+      fs.rmSync(rootDir, { recursive: true, force: true });
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
+  });
+
   test('delete guards: confirm, endpoint, running sessions, and the endpoint provider', async () => {
     const root = makeRoot();
     try {

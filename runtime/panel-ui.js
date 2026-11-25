@@ -1287,7 +1287,7 @@ function renderPanelHtml() {
     <div class="modal">
       <h2>Sync stale agy sessions with the active Keychain account</h2>
       <p>
-        <code>agy-sync-keychain.sh</code> restarts stale interactive <code>agy</code> processes and reopens their non-empty conversations in new iTerm2 tabs, so old in-memory refresh tokens cannot overwrite macOS Keychain backwards.
+        <code>agy-sync-keychain.sh</code> restarts managed <code>agy</code> sessions in-place on the same tab, closes empty owned tabs cleanly, and stops any unmanaged interactive <code>agy</code> processes (leaving their shells open) while reopening non-empty conversations in new managed tabs.
       </p>
       <div id="syncPreviewSummary" class="modal-summary"></div>
       <div id="syncRawOutput" class="pre-box">Loading dry-run preview…</div>
@@ -1620,9 +1620,12 @@ function renderPanelHtml() {
           meter(0, 'ok') + '<div class="qrow-foot">Not reported</div></div>';
       }
       const tone = quotaTone(win.percent);
+      const foot = win.resetIn
+        ? 'Resets in ' + esc(win.resetIn)
+        : (win.percent === 100 ? 'Full · starts on use' : '&nbsp;');
       return '<div class="qrow"><div class="qrow-top"><span>' + label + '</span><span class="qpct t-' + tone + '">' + win.percent + '%</span></div>' +
         meter(win.percent, tone) +
-        '<div class="qrow-foot">' + (win.resetIn ? 'Resets in ' + esc(win.resetIn) : '&nbsp;') + '</div></div>';
+        '<div class="qrow-foot">' + foot + '</div></div>';
     }
 
     function renderQuota(quota, accounts, vault = null) {
@@ -2297,10 +2300,17 @@ function renderPanelHtml() {
         return;
       }
       const plan = data.plan || {};
-      $('syncPreviewSummary').innerHTML =
-        '<span class="pill info">Keychain: ' + esc(plan.keychain?.email || 'unknown') + '</span>' +
-        '<span class="pill warn">Will restart &amp; reopen: ' + (plan.reopen || []).length + '</span>' +
-        '<span class="pill">Skipped empty/other: ' + (plan.skipped || []).length + '</span>';
+      const pills = ['<span class="pill info">Keychain: ' + esc(plan.keychain?.email || 'unknown') + '</span>'];
+      const repCount = (plan.replace || []).length;
+      const reoCount = (plan.reopen || []).length;
+      const clsCount = (plan.close || []).length;
+      const skpCount = (plan.skipped || []).length;
+      if (repCount > 0) pills.push('<span class="pill ok">In-place restart: ' + repCount + '</span>');
+      if (reoCount > 0) pills.push('<span class="pill warn">Reopen in managed tab: ' + reoCount + '</span>');
+      if (clsCount > 0) pills.push('<span class="pill">Close empty owned tab: ' + clsCount + '</span>');
+      if (skpCount > 0) pills.push('<span class="pill">Stop (not reopened): ' + skpCount + '</span>');
+      if (repCount + reoCount + clsCount + skpCount === 0) pills.push('<span class="pill">No other sessions to restart</span>');
+      $('syncPreviewSummary').innerHTML = pills.join('');
       $('btnSyncConfirm').disabled = false;
     }
 
@@ -3090,7 +3100,7 @@ function renderPanelHtml() {
       if (state.acctMenuOpen) renderAcctPopover();
       showToast((opts.isUndo ? 'Restoring ' : 'Switching to ') + email + '…', { sticky: true });
       try {
-        const res = await vaultPost('/api/accounts/switch', { email });
+        const res = await vaultPost('/api/accounts/switch', { email, skipBackgroundRefresh: Boolean(opts.openSync) });
         if (!res.ok) {
           showToast(res.data?.error || 'Account switch failed.', { tone: 'bad', sticky: true });
           return;
@@ -3102,7 +3112,7 @@ function renderPanelHtml() {
           return;
         }
         const suffix = res.data.refreshNeeded
-          ? ' (verified · refreshes on next agy run)'
+          ? (opts.openSync ? ' (verified · quota syncs after restart)' : ' (verified · syncing quota…)')
           : (res.data.quotaRefreshed ? ' (verified · quota refreshed)' : ' (verified)');
         const toastOpts = { tone: 'ok', duration: 10000 };
         if (!opts.isUndo && res.data.canUndo && res.data.previousEmail) {

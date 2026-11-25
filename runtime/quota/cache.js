@@ -7,11 +7,145 @@ const { resolveAntigravityPath } = require('../paths.js');
 const { mergeQuotaWindows } = require('./models.js');
 
 const CACHE_PATH = resolveAntigravityPath('agy-hud-quota-cache.json');
+const CACHE_LOCK_PATH = `${CACHE_PATH}.lock`;
 const ACCOUNT_QUOTA_STORE_PATH = path.join(path.dirname(CACHE_PATH), 'agy-hud-accounts-quota.json');
 const CACHE_VERSION = 3;
 const ACCOUNT_STORE_VERSION = 1;
 const MAX_STORED_ACCOUNTS = 20;
 const ACCOUNT_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const CACHE_LOCK_STALE_MS = 10_000;
+const SLEEP_ARR = typeof SharedArrayBuffer === 'function' ? new Int32Array(new SharedArrayBuffer(4)) : null;
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+function sleepSync(ms) {
+  if (SLEEP_ARR) {
+    try {
+      Atomics.wait(SLEEP_ARR, 0, 0, ms);
+      return;
+    } catch {}
+  }
+  const end = Date.now() + ms;
+  while (Date.now() < end) {}
+}
+
+function readLockInfo(filePath) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (raw && typeof raw === 'object') return raw;
+  } catch {}
+  return null;
+}
+
+function isLockStale(lockPath) {
+  let stat;
+  try {
+    stat = fs.statSync(lockPath);
+  } catch {
+    return { exists: false, stale: false, info: null };
+  }
+  const info = readLockInfo(lockPath);
+  if (info && Number.isInteger(info.pid) && info.pid > 0) {
+    // Never steal a lock held by a verified live process.
+    return { exists: true, stale: !isPidAlive(info.pid), info };
+  }
+  // Corrupt/unreadable lock without a valid PID: only treat as stale after grace period.
+  return { exists: true, stale: (Date.now() - stat.mtimeMs) > CACHE_LOCK_STALE_MS, info };
+}
+
+function tryReclaimStaleLock(lockPath, observedToken) {
+  const reclaimPath = `${lockPath}.reclaim`;
+  let reclaimFd = null;
+  try {
+    reclaimFd = fs.openSync(reclaimPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+    fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+    fs.closeSync(reclaimFd);
+    reclaimFd = null;
+  } catch (err) {
+    if (reclaimFd !== null) {
+      try { fs.closeSync(reclaimFd); } catch {}
+    }
+    if (err && err.code === 'EEXIST') {
+      const rState = isLockStale(reclaimPath);
+      if (rState.stale) {
+        try { fs.unlinkSync(reclaimPath); } catch {}
+      }
+    }
+    return false;
+  }
+  try {
+    const current = isLockStale(lockPath);
+    if (!current.exists || !current.stale) return false;
+    if (observedToken && current.info?.token && current.info.token !== observedToken) {
+      return false;
+    }
+    try { fs.unlinkSync(lockPath); } catch {}
+    return true;
+  } finally {
+    try { fs.unlinkSync(reclaimPath); } catch {}
+  }
+}
+
+/**
+ * Ownership-verified, fail-closed cross-process file lock protecting read-merge-write
+ * transactions on CACHE_PATH and ACCOUNT_QUOTA_STORE_PATH. Never steals a lock held
+ * by a live PID, serializes dead-PID reclamation via an O_EXCL reclaim guard, verifies
+ * owner token before release, and returns `{ acquired: false }` on any acquisition failure.
+ */
+function withCacheLock(fn, { blocking = true, waitMs = 500, lockPath = CACHE_LOCK_PATH } = {}) {
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  } catch {
+    return { acquired: false, value: false };
+  }
+  const deadline = blocking ? (Date.now() + waitMs) : 0;
+  const ownerToken = crypto.randomBytes(12).toString('hex');
+  let acquired = false;
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken, at: Date.now() }));
+      } finally {
+        fs.closeSync(fd);
+      }
+      acquired = true;
+      break;
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') {
+        return { acquired: false, value: false };
+      }
+      const state = isLockStale(lockPath);
+      if (!state.exists) continue;
+      if (state.stale) {
+        tryReclaimStaleLock(lockPath, state.info?.token || null);
+        continue;
+      }
+      if (!blocking || Date.now() >= deadline) {
+        return { acquired: false, value: false };
+      }
+      sleepSync(15);
+    }
+  }
+  try {
+    return { acquired: true, value: fn() };
+  } finally {
+    if (acquired) {
+      const current = readLockInfo(lockPath);
+      if (current && current.token === ownerToken) {
+        try { fs.unlinkSync(lockPath); } catch {}
+      }
+    }
+  }
+}
 
 function isCachePayloadFresh(raw) {
   return raw &&
@@ -137,7 +271,7 @@ function readCacheRaw() {
  * only when the cache belongs to the same credential identity (token rotation
  * is fine, account switch is not).
  */
-function writeCache(data, tokenOrAccessToken, tier = null, accountEmail = null, providerQuota = null) {
+function _writeCacheUnlocked(data, tokenOrAccessToken, tier = null, accountEmail = null, providerQuota = null) {
   const now = Date.now();
   const previousRaw = readCacheRaw();
   let sameIdentity = previousRaw && doesCachePayloadMatchToken(previousRaw, tokenOrAccessToken);
@@ -196,12 +330,15 @@ function writeCache(data, tokenOrAccessToken, tier = null, accountEmail = null, 
     providerQuota: resolvedProviderQuota,
     data: merged,
   };
+  let tmpPath = null;
   try {
-    const tmpPath = `${CACHE_PATH}.tmp.${process.pid}`;
+    tmpPath = `${CACHE_PATH}.tmp.${process.pid}.${crypto.randomBytes(3).toString('hex')}`;
     fs.writeFileSync(tmpPath, JSON.stringify(payload), { mode: 0o600 });
     fs.renameSync(tmpPath, CACHE_PATH);
   } catch {
-    try { fs.unlinkSync(`${CACHE_PATH}.tmp.${process.pid}`); } catch {}
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
   }
 
   if (resolvedEmail) {
@@ -214,6 +351,18 @@ function writeCache(data, tokenOrAccessToken, tier = null, accountEmail = null, 
       data: merged,
     });
   }
+  return true;
+}
+
+function writeCache(data, tokenOrAccessToken, tier = null, accountEmail = null, providerQuota = null, options = {}) {
+  const { beforeCommit = null, lockPath = CACHE_LOCK_PATH } = options || {};
+  const locked = withCacheLock(() => {
+    if (typeof beforeCommit === 'function' && beforeCommit() === false) {
+      return false;
+    }
+    return _writeCacheUnlocked(data, tokenOrAccessToken, tier, accountEmail, providerQuota);
+  }, { blocking: true, waitMs: 500, lockPath });
+  return Boolean(locked.acquired && locked.value);
 }
 
 function getAccountQuotaStorePath(rootDir = null) {
@@ -309,6 +458,52 @@ function readCacheAccountEmail() {
 }
 
 /**
+ * Passively persists authoritative providerQuota delivered on stdin by official
+ * `agy` CLI statusLine hooks (0 extra Google API requests). Skips disk writes
+ * when the cached providerQuota for the same token is already identical and
+ * recent (<30s) so idle HUD renders never cause fs.watch churn.
+ */
+function persistStdinProviderQuota({
+  stdinProviderQuota,
+  models = [],
+  token = null,
+  tier = null,
+  accountEmail = null,
+  now = Date.now(),
+  beforeCommit = null,
+  lockPath = CACHE_LOCK_PATH,
+} = {}) {
+  if (!stdinProviderQuota || typeof stdinProviderQuota !== 'object' || !token) return false;
+  if (typeof token === 'object' && token.expiry) {
+    const expMs = Date.parse(token.expiry);
+    if (Number.isFinite(expMs) && expMs <= now) return false;
+  }
+  const locked = withCacheLock(() => {
+    if (typeof beforeCommit === 'function' && beforeCommit() === false) {
+      return false;
+    }
+    const prev = readCacheRaw();
+    const sameIdentity = Boolean(prev && doesCachePayloadMatchToken(prev, token));
+    const mergedProviderQuota = sameIdentity && prev?.providerQuota
+      ? { ...prev.providerQuota, ...stdinProviderQuota }
+      : stdinProviderQuota;
+    if (
+      sameIdentity &&
+      prev &&
+      now - (prev.lastRefreshed || 0) < 30_000 &&
+      JSON.stringify(prev.providerQuota || null) === JSON.stringify(mergedProviderQuota)
+    ) {
+      return false;
+    }
+    const resolvedModels = Array.isArray(models) && models.length > 0
+      ? models
+      : (sameIdentity && Array.isArray(prev?.data) ? prev.data : []);
+    return _writeCacheUnlocked(resolvedModels, token, tier || null, accountEmail || null, mergedProviderQuota);
+  }, { blocking: false, lockPath });
+  return Boolean(locked.acquired && locked.value);
+}
+
+/**
  * Read the cached active-account email, but ONLY when the cache belongs to the
  * current token. Unlike tier, a wrong email is worse than none: after an account
  * switch the token no longer matches, so we return null (caller falls back) and
@@ -368,9 +563,11 @@ function readCacheFallback() {
 
 module.exports = {
   CACHE_PATH,
+  CACHE_LOCK_PATH,
   CACHE_VERSION,
   ACCOUNT_QUOTA_STORE_PATH,
   ACCOUNT_STORE_VERSION,
+  withCacheLock,
   getAccountQuotaStorePath,
   readAccountQuotaStore,
   writeAccountQuotaSnapshot,
@@ -391,4 +588,5 @@ module.exports = {
   readCacheLastRefreshed,
   readCacheFallback,
   readCacheAccountEmail,
+  persistStdinProviderQuota,
 };

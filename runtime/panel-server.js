@@ -10,7 +10,15 @@ const { resolveAntigravityPath } = require('./paths.js');
 const { refreshQuotaNow } = require('./quota.js');
 const { buildPanelOverview, getSessionDetail, renameConversationTitle, collectAllSessions } = require('./panel-data.js');
 const { inspectLiveAuth, detectRunningAgySessions, previewAccountSync, executeAccountSync } = require('./account-sync.js');
-const { getVaultStatus, saveCurrentAccount, switchSavedAccount, removeSavedAccount, prepareSignInNewAccount } = require('./account-vault.js');
+const {
+  getVaultStatus,
+  readVaultMeta,
+  saveCurrentAccount,
+  switchSavedAccount,
+  refreshExpiredActiveAccount,
+  removeSavedAccount,
+  prepareSignInNewAccount,
+} = require('./account-vault.js');
 const { getLiveEndpoints, describeOps, setConversationsArchived, deleteConversations } = require('./conversation-ops.js');
 const { renderPanelHtml, renderPairingHtml } = require('./panel-ui.js');
 
@@ -518,6 +526,8 @@ function createPanelServer(options = {}) {
   let lastSeenAccountKey = null;
   let quotaRefreshing = false;
   let lastQuotaAutoAttemptAt = 0;
+  let pendingExpiredRefresh = null;
+  let syncInProgress = false;
   const pollIntervalMs = Number.isInteger(options.pollIntervalMs) && options.pollIntervalMs > 0
     ? options.pollIntervalMs
     : AUTH_POLL_INTERVAL_MS;
@@ -1066,6 +1076,41 @@ function createPanelServer(options = {}) {
             ...opts,
           }));
           result = await switcher(body?.email, {});
+          if (result && result.ok && !result.alreadyActive) {
+            const activationGen = Number.isInteger(result.activationGen)
+              ? result.activationGen
+              : readVaultMeta(rootDir).activationGen;
+            const shouldBackgroundRefresh = Boolean(
+              result.refreshNeeded &&
+              result.hasRefreshToken &&
+              body?.skipBackgroundRefresh !== true &&
+              !syncInProgress &&
+              options.enableExpiredAutoRefresh !== false
+            );
+            if (shouldBackgroundRefresh) {
+              const expiredRefresher = options.vaultExpiredRefresher || ((email, opts) => refreshExpiredActiveAccount(email, {
+                rootDir,
+                quotaRefresher: options.quotaRefresher,
+                ...vaultOpts,
+                ...opts,
+              }));
+              const job = Promise.resolve()
+                .then(() => expiredRefresher(result.email, { expectedGen: activationGen }))
+                .then((r) => {
+                  const curGen = readVaultMeta(rootDir).activationGen;
+                  if (Number.isInteger(result.activationGen) && curGen !== activationGen) return;
+                  if (r && (r.refreshed || r.vaultUpdated || r.quotaRefreshed)) {
+                    invalidateLiveCaches({ vault: true });
+                    scheduleBroadcast(true);
+                  }
+                })
+                .catch(() => {})
+                .finally(() => {
+                  if (pendingExpiredRefresh === job) pendingExpiredRefresh = null;
+                });
+              pendingExpiredRefresh = job;
+            }
+          }
         } else if (pathname === '/api/accounts/sign-in') {
           const starter = options.vaultSignInStarter || ((opts) => prepareSignInNewAccount({ rootDir, ...vaultOpts, ...opts }));
           result = await starter({ launchTerminal: body?.launchTerminal !== false });
@@ -1104,8 +1149,24 @@ function createPanelServer(options = {}) {
           sendJson(res, 400, { ok: false, error: 'Explicit confirmation (confirm: true) is required' });
           return;
         }
-        const executor = options.syncExecutor || ((opts) => executeAccountSync({ ...opts, scriptPath: options.syncScriptPath, rootDir }));
-        const result = await executor({ confirm: true });
+        if (syncInProgress) {
+          sendJson(res, 409, { ok: false, error: 'An account sync is already in progress.' });
+          return;
+        }
+        syncInProgress = true;
+        let result;
+        try {
+          // Drain all in-flight or newly chained background expired-account refreshes
+          // before restarting interactive agy sessions.
+          while (pendingExpiredRefresh) {
+            const inflight = pendingExpiredRefresh;
+            await inflight.catch(() => null);
+          }
+          const executor = options.syncExecutor || ((opts) => executeAccountSync({ ...opts, scriptPath: options.syncScriptPath, rootDir }));
+          result = await executor({ confirm: true });
+        } finally {
+          syncInProgress = false;
+        }
         scheduleBroadcast(true);
         sendJson(res, result.ok ? 200 : 500, result);
         return;
