@@ -779,6 +779,75 @@ function renderPanelHtml() {
       body.bulk-open .app { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
       .toast { left: 12px; right: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); }
     }
+
+    /* ---- Depth & translucency (cross-platform progressive enhancement) ---- */
+    body {
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(ellipse 60% 100% at 50% 0%, rgba(124, 156, 255, 0.085) 0%, rgba(124, 156, 255, 0.05) 32%, rgba(124, 156, 255, 0.018) 62%, rgba(124, 156, 255, 0) 100%),
+        radial-gradient(ellipse 34% 80% at 84% 0%, rgba(167, 139, 250, 0.05) 0%, rgba(167, 139, 250, 0.018) 55%, rgba(167, 139, 250, 0) 100%);
+      background-repeat: no-repeat;
+      background-size: 100% 560px;
+    }
+    .card {
+      border-top-color: #2c313a;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 32px -18px rgba(0, 0, 0, 0.65);
+    }
+    .modal {
+      border-top-color: #3d4451;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 28px 64px -16px rgba(0, 0, 0, 0.75);
+    }
+    @media (min-width: 761px) {
+      .bulk-bar { left: 0; right: 0; margin-inline: auto; width: max-content; transform: none; }
+    }
+    @media (max-width: 760px) {
+      body {
+        background-image:
+          radial-gradient(ellipse 120% 100% at 50% 0%, rgba(124, 156, 255, 0.08) 0%, rgba(124, 156, 255, 0.045) 34%, rgba(124, 156, 255, 0.015) 64%, rgba(124, 156, 255, 0) 100%);
+        background-size: 100% 380px;
+      }
+    }
+    @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .topbar {
+        background: rgba(11, 12, 15, 0.72);
+        border-bottom-color: rgba(255, 255, 255, 0.06);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        backdrop-filter: blur(14px) saturate(140%);
+      }
+      .bulk-bar {
+        background: rgba(24, 27, 33, 0.78);
+        border-color: rgba(255, 255, 255, 0.09);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        backdrop-filter: blur(14px) saturate(140%);
+      }
+      .toast {
+        background: rgba(24, 27, 33, 0.82);
+        border-top-color: rgba(255, 255, 255, 0.09);
+        border-right-color: rgba(255, 255, 255, 0.09);
+        border-bottom-color: rgba(255, 255, 255, 0.09);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        backdrop-filter: blur(14px) saturate(140%);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .modal-backdrop {
+          background: rgba(5, 6, 8, 0.58);
+          -webkit-backdrop-filter: blur(6px) saturate(120%);
+          backdrop-filter: blur(6px) saturate(120%);
+        }
+      }
+    }
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      .topbar { background: var(--bg); border-bottom-color: var(--border); }
+      .bulk-bar { background: var(--surface-2); border-color: var(--border-strong); }
+      .toast {
+        background: var(--surface-2);
+        border-top-color: var(--border-strong);
+        border-right-color: var(--border-strong);
+        border-bottom-color: var(--border-strong);
+      }
+      .modal-backdrop { background: rgba(5, 6, 8, 0.72); }
+      .topbar, .bulk-bar, .toast, .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
   </style>
 </head>
 <body>
@@ -2869,7 +2938,7 @@ function renderPairingHtml() {
     .logo svg { width: 24px; height: 24px; }
     h1 { margin: 0 0 8px; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
     p { margin: 0 0 24px; color: #b3b9c4; font-size: 14.5px; line-height: 1.5; }
-    code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px; padding: 1px 6px; border-radius: 5px; background: #20242b; color: #e9ebef; }
+    code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px; padding: 1px 6px; border-radius: 5px; background: #20242b; color: #e9ebef; white-space: nowrap; }
     input {
       width: 100%;
       height: 56px;
@@ -2898,7 +2967,30 @@ function renderPairingHtml() {
     }
     button:disabled { opacity: 0.5; }
     .msg { min-height: 22px; margin-top: 14px; font-size: 14px; color: #f0646a; text-align: center; }
-    .foot { margin-top: 28px; font-size: 12.5px; color: #7c8491; }
+    .foot { margin-top: 28px; font-size: 12.5px; color: #7c8491; text-align: center; }
+    body {
+      padding: calc(48px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
+      background-color: #0b0c0f;
+      background-image:
+        radial-gradient(ellipse 120% 100% at 50% 0%, rgba(124, 156, 255, 0.09) 0%, rgba(124, 156, 255, 0.05) 34%, rgba(124, 156, 255, 0.016) 64%, rgba(124, 156, 255, 0) 100%);
+      background-repeat: no-repeat;
+      background-size: 100% 420px;
+    }
+    main {
+      width: min(400px, 100%);
+      max-width: none;
+      margin: 0 auto;
+      padding: 28px 24px 24px;
+      background: #121419;
+      border: 1px solid #23272e;
+      border-top-color: #2c313a;
+      border-radius: 16px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 20px 48px -20px rgba(0, 0, 0, 0.7);
+    }
+    input { background: #0b0c0f; }
+    button { cursor: pointer; transition: background-color 0.12s; }
+    button:hover:not(:disabled) { background: #93adff; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #7c9cff; outline-offset: 2px; }
   </style>
 </head>
 <body>
