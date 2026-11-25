@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**跨多端实时查看与管理所有 Antigravity CLI（`agy`）会话——支持电脑、手机、平板、局域网 / VPN，以及远程服务器部署。** 无论身在哪个屏幕前，都能实时同步查看缓存命中率、输出速度、工具耗时、上下文占用、剩余配额与估算费用，并随时重命名、归档或批量删除会话。
+**跨多端实时查看与管理所有 Antigravity CLI（`agy`）会话——支持电脑、手机、平板、局域网 / TUN 虚拟组网，以及远程服务器部署。** 无论身在哪个屏幕前，都能实时同步查看缓存命中率、输出速度、工具耗时、上下文占用、剩余配额与估算费用，并随时重命名、归档或批量删除会话。
 
 [English](./README.md)
 
@@ -20,7 +20,7 @@
 
 ## 核心优势
 
-- **多端与远程服务器实时同步**：终端状态栏、电脑浏览器、手机/平板（PWA、6 位配对码、30 天免重登）、局域网、VPN 组网（WireGuard / Tailscale / ZeroTier）及无头服务器（`--lan --networks <cidr>` 或 SSH 隧道）全打通。
+- **多端与远程服务器实时同步**：终端状态栏、电脑浏览器、手机/平板（PWA、6 位配对码、30 天免重登）、局域网、TUN 虚拟组网（Tailscale / ZeroTier / WireGuard）及无头服务器（`--lan --networks <cidr>` 或 SSH 隧道）全打通。
 - **任意屏幕直接管理会话**：搜索筛选、持久化重命名（同步回写 `agy` 真实数据源，`/resume` 立即可见）、归档 / 取消归档，以及 **Select** 多选 / 全选批量归档与安全永久删除（检测运行中窗口并二次确认）。
 - **多账号与缓存洞察**：多账号 5h / 每周配额对照、切号残留 `unsynced` 窗口告警、按时间范围估算 API 费用、自动标注缓存未命中原因。
 - **开箱即用、纯本地零负担**：零运行时依赖、`agy` 内 `/check` 零 token 响应、无遥测，默认仅监听 `127.0.0.1`。
@@ -29,7 +29,7 @@
 |---|---|---|
 | **本机电脑** | `/check`（或 `agy-check panel`） | 打开 `http://127.0.0.1:18721` |
 | **手机 / 平板（同局域网）** | `/check lan` | 输出局域网地址 + 6 位配对码（30 天免重登，支持 PWA） |
-| **远程 / 无头服务器（VPN / 局域网）** | `agy-check panel --daemon --lan --networks 10.0.0.0/24` | 通过 WireGuard / Tailscale / ZeroTier 或 Linux 服务器局域网跨端直连 |
+| **远程 / 无头服务器（TUN / 局域网）** | `agy-check panel --daemon --lan --networks 10.0.0.0/24` | 通过 TUN 虚拟网段（Tailscale / ZeroTier / WireGuard）或 Linux 服务器局域网跨端直连 |
 | **远程服务器（SSH 隧道）** | `ssh -L 18721:127.0.0.1:18721 user@server` | 服务器仅监听 `127.0.0.1`，本机访问 `http://127.0.0.1:18721` |
 | **终端 / 命令行** | 底部状态栏、`/check ls`、`agy-check ls` | 实时速度、工具耗时、缓存命中、配额与纯文本会话表 |
 
@@ -55,18 +55,18 @@
   <img src="./assets/phone-pair.png" alt="手机端一次性配对页面" width="240">
 </p>
 
-### 3. 远程 / 无头服务器接入（VPN 组网或 SSH 隧道）
+### 3. 远程 / 无头服务器接入（TUN 组网或 SSH 隧道）
 
 如果你的 `agy` 跑在远程 Linux/macOS 服务器、HomeLab 或云主机上，有两种安全方式接入多端查看：
 
-- **VPN 组网（WireGuard / Tailscale / ZeroTier）或服务器局域网段**——保存一次允许的网段 CIDR，手机、平板与笔记本都可凭 6 位配对码直接访问（手机无需 SSH 客户端）：
+- **TUN 虚拟组网（Tailscale / ZeroTier / WireGuard）或服务器局域网段**——保存一次允许的网段 CIDR，手机、平板与笔记本都可凭 6 位配对码直接访问（手机无需 SSH 客户端）：
   ```bash
-  # 在服务器上运行（示例：WireGuard 网段或 Tailscale 的 100.64.0.0/10，多网段逗号分隔）
+  # 在服务器上运行（示例：TUN 虚拟网段或 Tailscale 的 100.64.0.0/10，多网段逗号分隔）
   agy-check panel --daemon --lan --networks 10.0.0.0/24
   # 或在 agy 内运行：
   /check lan --networks 10.0.0.0/24
   ```
-  <sub>`--lan` 默认只响应物理网卡（`en*` / `eth*` / `wlan*` / `wl*`），虚拟机网桥和未授权隧道均返回 `403`。通过 `--networks` 添加网段既可用于 VPN 组网，也可覆盖 Linux 现代网卡名（如 `ens*` / `enp*`）；传 `--networks none` 可清空。</sub>
+  <sub>`--lan` 默认只响应物理网卡（`en*` / `eth*` / `wlan*` / `wl*`），虚拟机网桥和未授权 TUN 网卡均返回 `403`。通过 `--networks` 添加网段既可用于 TUN 虚拟组网，也可覆盖 Linux 现代网卡名（如 `ens*` / `enp*`）；传 `--networks none` 可清空。</sub>
 - **SSH 端口转发（服务器仅监听 `127.0.0.1`）**——适合电脑端快速查看，服务器无需开放任何非回环端口：
   ```bash
   # 在服务器上：
@@ -76,7 +76,7 @@
   ```
   随后在本机浏览器打开 `http://127.0.0.1:18721`。
 
-> **安全说明**：已配对设备可查看全部数据、刷新配额、重命名、归档与删除会话；账号同步、生成配对码和注销设备仅限宿主机操作。传输为明文 HTTP，请仅在可信局域网或加密 VPN 组网内开启 `--lan`（或改用 SSH 隧道），切勿将 `18721` 端口直接暴露到公网。
+> **安全说明**：已配对设备可查看全部数据、刷新配额、重命名、归档与删除会话；账号同步、生成配对码和注销设备仅限宿主机操作。传输为明文 HTTP，请仅在可信局域网或加密 TUN 组网内开启 `--lan`（或改用 SSH 隧道），切勿将 `18721` 端口直接暴露到公网。
 
 ---
 
@@ -131,7 +131,7 @@ node scripts/bootstrap.js
 | 斜杠命令 | 作用 |
 |---|---|
 | `/check` 或 `/check panel` | 启动或复用面板并在浏览器打开 |
-| `/check lan [--networks <cidr,...>\|none] [--revoke]` | 开启多端局域网 / VPN 访问并输出地址与配对码 |
+| `/check lan [--networks <cidr,...>\|none] [--revoke]` | 开启多端局域网 / TUN 访问并输出地址与配对码 |
 | `/check ls [active\|24h\|today\|7d\|30d\|all]` | 在对话中输出会话表 |
 | `/check session [id]` | 查看某个会话的逐轮缓存详情（默认当前会话） |
 | `/check refresh` | 刷新配额后输出会话表 |
@@ -142,7 +142,7 @@ node scripts/bootstrap.js
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   启动面板（127.0.0.1）
-   [--lan] [--networks <cidr,...>|none]              开启多端局域网 / VPN 模式与配对码
+   [--lan] [--networks <cidr,...>|none]              开启多端局域网 / TUN 模式与配对码
 agy-check panel pair | revoke                        生成新配对码 | 注销所有已配对设备
 agy-check panel handoff                              移交当前 agy 窗口回环接口给面板（用于永久删除）
 agy-check panel stop                                 停止后台面板

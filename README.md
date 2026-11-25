@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**Monitor and manage every Antigravity CLI (`agy`) session across all your devices — desktop, phone, tablet, LAN/VPN, or remote server.** Stay synced live on cache hit rate, output speed, tool time, context use, quota, and estimated cost, and rename, archive, or bulk-delete sessions from whichever screen is in front of you.
+**Monitor and manage every Antigravity CLI (`agy`) session across all your devices — desktop, phone, tablet, LAN/TUN, or remote server.** Stay synced live on cache hit rate, output speed, tool time, context use, quota, and estimated cost, and rename, archive, or bulk-delete sessions from whichever screen is in front of you.
 
 [中文文档](./README_zh.md)
 
@@ -20,7 +20,7 @@
 
 ## Why agy-check
 
-- **Multi-device & remote server live sync:** Watch and control every `agy` session from terminal HUD, desktop browser, phone/tablet (PWA, 6-digit pairing, 30-day sign-in), LAN, VPN overlay (`WireGuard` / `Tailscale` / `ZeroTier`), or headless server (`--lan --networks <cidr>` or SSH tunnel).
+- **Multi-device & remote server live sync:** Watch and control every `agy` session from terminal HUD, desktop browser, phone/tablet (PWA, 6-digit pairing, 30-day sign-in), LAN, TUN overlay (`Tailscale` / `ZeroTier` / `WireGuard`), or headless server (`--lan --networks <cidr>` or SSH tunnel).
 - **Manage sessions anywhere:** Search, rename (persisted to `agy`'s source of truth), archive/unarchive, and **Select All** bulk archive or safe permanent delete (with running-window check).
 - **Multi-account & cache visibility:** 5h/weekly quota across accounts, stale `unsynced` window warnings, range-based API cost estimates, and automatic cache-miss diagnosis.
 - **Zero-effort, local-first:** Zero runtime deps, zero-token `/check` inside `agy`, no telemetry, `127.0.0.1`-only until you enable `--lan`.
@@ -29,7 +29,7 @@
 |---|---|---|
 | **Local desktop** | `/check` (or `agy-check panel`) | Opens `http://127.0.0.1:18721` |
 | **Phone / Tablet (same LAN)** | `/check lan` | Prints LAN URL + 6-digit pairing code (30-day sign-in, PWA) |
-| **Remote / Headless server (VPN / LAN)** | `agy-check panel --daemon --lan --networks 10.0.0.0/24` | Access from laptop & phone over WireGuard/Tailscale/ZeroTier or Linux server LAN |
+| **Remote / Headless server (TUN / LAN)** | `agy-check panel --daemon --lan --networks 10.0.0.0/24` | Access from laptop & phone over TUN overlay (Tailscale/ZeroTier/WireGuard) or Linux server LAN |
 | **Remote server (SSH tunnel)** | `ssh -L 18721:127.0.0.1:18721 user@server` | Keeps server `127.0.0.1`-only; open `http://127.0.0.1:18721` locally |
 | **Terminal / CLI** | Bottom HUD, `/check ls`, `agy-check ls` | Live speed, tool time, cache hit, quota, and plain-text tables |
 
@@ -55,18 +55,18 @@ Inside `agy`, type `/check lan` (or `agy-check panel --daemon --lan` in a shell)
   <img src="./assets/phone-pair.png" alt="One-time pairing screen on a phone" width="240">
 </p>
 
-### 3. Remote / headless server (VPN overlay or SSH tunnel)
+### 3. Remote / headless server (TUN overlay or SSH tunnel)
 
 Running `agy` on a remote Linux/macOS server, homelab, or cloud VM? Access its live dashboard from all your devices in two safe ways:
 
-- **Over a VPN overlay (WireGuard / Tailscale / ZeroTier) or server LAN subnet** — whitelist the CIDR once and pair phones, tablets, and laptops with a 6-digit code (no SSH app needed on mobile):
+- **Over a TUN overlay (`Tailscale` / `ZeroTier` / `WireGuard`) or server LAN subnet** — whitelist the CIDR once and pair phones, tablets, and laptops with a 6-digit code (no SSH app needed on mobile):
   ```bash
-  # On the server (e.g. WireGuard subnet or Tailscale 100.64.0.0/10; comma-separated for multiple)
+  # On the server (e.g. TUN mesh subnet or Tailscale 100.64.0.0/10; comma-separated for multiple)
   agy-check panel --daemon --lan --networks 10.0.0.0/24
   # Or inside agy:
   /check lan --networks 10.0.0.0/24
   ```
-  <sub>By default `--lan` serves physical `en*` / `eth*` / `wlan*` / `wl*` interfaces only; VM bridges and VPN tunnels return `403`. Adding a CIDR via `--networks` enables your VPN overlay — and also covers Linux servers using predictable NIC names such as `ens*` / `enp*`. Pass `--networks none` to clear.</sub>
+  <sub>By default `--lan` serves physical `en*` / `eth*` / `wlan*` / `wl*` interfaces only; VM bridges and TUN interfaces return `403`. Adding a CIDR via `--networks` enables your TUN overlay — and also covers Linux servers using predictable NIC names such as `ens*` / `enp*`. Pass `--networks none` to clear.</sub>
 - **Over an SSH tunnel (keeps the server `127.0.0.1`-only)** — ideal for quick laptop access with zero ports opened on the server:
   ```bash
   # On the server:
@@ -76,7 +76,7 @@ Running `agy` on a remote Linux/macOS server, homelab, or cloud VM? Access its l
   ```
   Then open `http://127.0.0.1:18721` locally.
 
-> **Security note:** Paired devices can view everything, refresh quota, rename, archive, and delete sessions; account sync, pairing codes, and sign-out stay restricted to the host running `agy`. Traffic is plain HTTP — use `--lan` only inside a trusted LAN or encrypted VPN overlay (or use SSH forwarding), and never expose port `18721` to the public internet.
+> **Security note:** Paired devices can view everything, refresh quota, rename, archive, and delete sessions; account sync, pairing codes, and sign-out stay restricted to the host running `agy`. Traffic is plain HTTP — use `--lan` only inside a trusted LAN or encrypted TUN overlay (or use SSH forwarding), and never expose port `18721` to the public internet.
 
 ---
 
@@ -131,7 +131,7 @@ Inside `agy` (zero tokens):
 | Slash command | What it does |
 |---|---|
 | `/check` or `/check panel` | Start or reuse the dashboard and open it in your browser |
-| `/check lan [--networks <cidr,...>\|none] [--revoke]` | Enable multi-device LAN/VPN access and print URLs + pairing code |
+| `/check lan [--networks <cidr,...>\|none] [--revoke]` | Enable multi-device LAN/TUN access and print URLs + pairing code |
 | `/check ls [active\|24h\|today\|7d\|30d\|all]` | Print the session table in chat |
 | `/check session [id]` | Per-turn cache detail for a session (defaults to current) |
 | `/check refresh` | Refresh quota and print the session table |
@@ -142,7 +142,7 @@ Standalone CLI (optional symlink: `ln -s ~/.gemini/antigravity-cli/agy-hud-runti
 
 ```text
 agy-check panel [--port 18721] [--daemon] [--open]   Start dashboard (127.0.0.1)
-   [--lan] [--networks <cidr,...>|none]              Enable multi-device LAN/VPN mode with pairing code
+   [--lan] [--networks <cidr,...>|none]              Enable multi-device LAN/TUN mode with pairing code
 agy-check panel pair | revoke                        Generate pairing code | sign out all paired devices
 agy-check panel handoff                              Hand this agy window's local API endpoint to the panel (for delete)
 agy-check panel stop                                 Stop the background dashboard
