@@ -578,6 +578,9 @@ function renderPanelHtml() {
     .handoff { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--text-2); }
     .handoff code { font-size: 12px; }
     .ops-note { margin-top: 6px; font-size: 12px; color: var(--amber); line-height: 1.4; }
+    .conn-btn { border: 0; background: transparent; cursor: pointer; padding: 3px 8px; border-radius: 999px; transition: background 0.12s, color 0.12s; }
+    .conn-btn:hover { background: var(--surface-2); color: var(--text); }
+    .toast-action { margin-top: 8px; }
     #deleteModal .modal { max-width: 580px; }
     .del-list { list-style: none; margin: 0 0 14px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); max-height: 240px; overflow-y: auto; }
     .del-list li { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 13px; }
@@ -764,7 +767,7 @@ function renderPanelHtml() {
       <div class="brand">
         <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-6"/></svg></span>
         <span class="brand-name">agy-check</span>
-        <span id="connState" class="conn"><span class="dot"></span>Connecting</span>
+        <button id="connState" class="conn conn-btn" type="button" title="Live sync status — click to sync now"><span class="dot"></span>Connecting</button>
       </div>
       <div class="top-right">
         <span id="rangeCost" class="cost-pill" title="Estimated API cost for the selected range; updates after every completed turn"><span class="k">24h</span>--</span>
@@ -1169,6 +1172,9 @@ function renderPanelHtml() {
 
     function renderOverview(data) {
       state.overview = data;
+      lastSyncedAt = Date.now();
+      updateConnTitle();
+      handleUiHash(data.uiHash);
       if (data.ops) state.ops = data.ops;
       const auth = data.auth || {};
       const quota = data.quota || {};
@@ -1982,6 +1988,9 @@ function renderPanelHtml() {
       if (opts.handoff) {
         body += '<div class="handoff">' + handoffHtml(opts.handoff) + '</div>';
       }
+      if (opts.action) {
+        body += '<div class="toast-action"><button class="btn sm primary" type="button" ' + opts.action.attr + '>' + esc(opts.action.label) + '</button></div>';
+      }
       $('opToastBody').innerHTML = body;
       el.hidden = false;
       if (!opts.sticky) {
@@ -2475,6 +2484,10 @@ function renderPanelHtml() {
 
     $('btnToastClose').addEventListener('click', hideToast);
     document.addEventListener('click', async (e) => {
+      if (e.target.closest('button[data-reload-page]')) {
+        location.reload();
+        return;
+      }
       const btn = e.target.closest('button[data-copy-handoff]');
       if (!btn) return;
       if (await copyText(btn.dataset.copyHandoff || handoffCmd())) {
@@ -2636,21 +2649,160 @@ function renderPanelHtml() {
       }, 150);
     });
 
-    // Keep relative times ("4m ago") honest while no SSE change arrives; skipped while the tab is hidden.
-    setInterval(() => {
-      if (!document.hidden && state.overview) renderOverview(state.overview);
-    }, 60000);
+    // ---------- Automatic live sync, wake recovery & UI reload ----------
+
+    const SSE_STALE_MS = 45000;
+    const FALLBACK_POLL_MS = 5000;
+    let sse = null;
+    let sseConnectedOnce = false;
+    let lastSseAt = 0;
+    let lastSyncedAt = 0;
+    let fallbackPollTimer = null;
+    let currentUiHash = null;
+    let reloadPromptedHash = null;
 
     function setConn(kind, label) {
       $('connState').innerHTML = '<span class="dot ' + kind + '"></span>' + label;
     }
 
-    function connectSse() {
-      const es = new EventSource('/api/events');
-      es.onopen = () => setConn('live', 'Live');
-      es.addEventListener('changed', () => fetchOverview());
-      es.onerror = () => setConn('warn', 'Reconnecting');
+    function updateConnTitle() {
+      const synced = lastSyncedAt ? 'Last synced ' + fmtRel(lastSyncedAt) + ' · ' : '';
+      $('connState').title = synced + 'Click to sync now';
     }
+
+    function isUserBusy() {
+      return Boolean(
+        !$('renameForm').hidden ||
+        $('deleteModal').classList.contains('open') ||
+        $('syncModal').classList.contains('open') ||
+        $('lanModal').classList.contains('open') ||
+        state.selectMode ||
+        state.checkedIds.size > 0 ||
+        (document.activeElement === $('searchInput') && $('searchInput').value.trim().length > 0)
+      );
+    }
+
+    function handleUiHash(hash) {
+      if (!hash || typeof hash !== 'string') return;
+      if (!currentUiHash) {
+        currentUiHash = hash;
+        return;
+      }
+      if (hash === currentUiHash) return;
+      if (!isUserBusy()) {
+        location.reload();
+        return;
+      }
+      if (reloadPromptedHash !== hash) {
+        reloadPromptedHash = hash;
+        showToast('Panel updated to a newer version. Reload to load the latest interface.', {
+          tone: 'warn',
+          action: { label: 'Reload now', attr: 'data-reload-page="1"' },
+          sticky: true,
+        });
+      }
+    }
+
+    function stopFallbackPoll() {
+      if (fallbackPollTimer) {
+        clearInterval(fallbackPollTimer);
+        fallbackPollTimer = null;
+      }
+    }
+
+    function startFallbackPoll() {
+      if (fallbackPollTimer) return;
+      fallbackPollTimer = setInterval(() => {
+        if (!document.hidden) fetchOverview();
+      }, FALLBACK_POLL_MS);
+    }
+
+    function isSseStale() {
+      return !sse || sse.readyState === EventSource.CLOSED || (lastSseAt > 0 && Date.now() - lastSseAt > SSE_STALE_MS);
+    }
+
+    function connectSse() {
+      if (sse) {
+        try { sse.close(); } catch {}
+      }
+      const es = new EventSource('/api/events');
+      sse = es;
+      es.onopen = () => {
+        if (sse !== es) return;
+        const reconnected = sseConnectedOnce;
+        sseConnectedOnce = true;
+        lastSseAt = Date.now();
+        stopFallbackPoll();
+        setConn('live', 'Live');
+        updateConnTitle();
+        if (reconnected) fetchOverview();
+      };
+      es.addEventListener('ready', (ev) => {
+        if (sse !== es) return;
+        lastSseAt = Date.now();
+        try {
+          const data = JSON.parse(ev.data || '{}');
+          handleUiHash(data.uiHash);
+        } catch {}
+      });
+      es.addEventListener('ping', () => {
+        if (sse !== es) return;
+        lastSseAt = Date.now();
+        updateConnTitle();
+      });
+      es.addEventListener('changed', () => {
+        if (sse !== es) return;
+        lastSseAt = Date.now();
+        fetchOverview();
+      });
+      es.onerror = () => {
+        if (sse !== es) return;
+        setConn('warn', 'Reconnecting');
+        startFallbackPoll();
+      };
+    }
+
+    async function syncNow(forceReconnect = false) {
+      if (forceReconnect || isSseStale()) connectSse();
+      setConn('live', 'Syncing…');
+      await fetchOverview();
+      if (sse && sse.readyState === EventSource.OPEN) {
+        setConn('live', 'Live');
+      } else {
+        setConn('warn', 'Reconnecting');
+      }
+      updateConnTitle();
+    }
+
+    $('connState').addEventListener('click', () => syncNow(true));
+
+    // Recover silently stalled mobile/Safari EventSource on tab wake, focus, or network return.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      if (isSseStale()) connectSse();
+      if (Date.now() - lastSyncedAt > 1500) fetchOverview();
+    });
+    window.addEventListener('online', () => syncNow(true));
+    window.addEventListener('focus', () => {
+      if (!document.hidden && Date.now() - lastSyncedAt > 5000) fetchOverview();
+    });
+
+    // Heartbeat watchdog: rebuild SSE if no ping/event arrived within SSE_STALE_MS.
+    setInterval(() => {
+      if (!document.hidden && sse && lastSseAt > 0 && Date.now() - lastSseAt > SSE_STALE_MS) {
+        setConn('warn', 'Reconnecting');
+        connectSse();
+        fetchOverview();
+      }
+    }, 15000);
+
+    // Keep relative times ("4m ago") honest while no SSE change arrives; skipped while the tab is hidden.
+    setInterval(() => {
+      if (!document.hidden && state.overview) {
+        renderOverview(state.overview);
+        updateConnTitle();
+      }
+    }, 60000);
 
     fetchOverview();
     connectSse();

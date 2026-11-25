@@ -18,6 +18,8 @@ const LAN_HOST = '0.0.0.0';
 const DEFAULT_PORT = 18721;
 const DEBOUNCE_MS = 500;
 const AUTH_POLL_INTERVAL_MS = 4000;
+const SSE_HEARTBEAT_MS = 20000;
+const QUOTA_AUTO_REFRESH_MS = 3 * 60 * 1000;
 const SESSION_COOKIE = 'agy_check_session';
 const DEVICE_ACCESS_MS = 30 * 24 * 60 * 60 * 1000;
 const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
@@ -476,9 +478,22 @@ function createPanelServer(options = {}) {
   const watchers = [];
   let debounceTimer = null;
   let pollTimer = null;
+  let heartbeatTimer = null;
   let lastDigest = null;
   let lastSeenAccountKey = null;
   let quotaRefreshing = false;
+  let lastQuotaAutoAttemptAt = 0;
+  const pollIntervalMs = Number.isInteger(options.pollIntervalMs) && options.pollIntervalMs > 0
+    ? options.pollIntervalMs
+    : AUTH_POLL_INTERVAL_MS;
+  const heartbeatMs = Number.isInteger(options.heartbeatIntervalMs) && options.heartbeatIntervalMs > 0
+    ? options.heartbeatIntervalMs
+    : SSE_HEARTBEAT_MS;
+  const quotaAutoRefreshMs = Number.isInteger(options.quotaAutoRefreshMs)
+    ? options.quotaAutoRefreshMs
+    : QUOTA_AUTO_REFRESH_MS;
+  const quotaAutoEnabled = quotaAutoRefreshMs > 0 && (!options.dataOptions?.quotaFetcher || Boolean(options.quotaRefresher));
+  const runQuotaRefresh = () => (options.quotaRefresher ? options.quotaRefresher() : refreshQuotaNow({ roots: [rootDir] }));
 
   const dataOpts = {
     rootDir,
@@ -512,7 +527,8 @@ function createPanelServer(options = {}) {
       const acctKey = `${auth.activeEmail || ''}:${auth.tokenHash || ''}`;
       if (lastSeenAccountKey !== null && acctKey !== lastSeenAccountKey && auth.loggedIn && !auth.expired && !quotaRefreshing) {
         quotaRefreshing = true;
-        refreshQuotaNow({ roots: [rootDir] })
+        lastQuotaAutoAttemptAt = Date.now();
+        runQuotaRefresh()
           .catch(() => null)
           .finally(() => {
             quotaRefreshing = false;
@@ -523,6 +539,23 @@ function createPanelServer(options = {}) {
 
       const overview = await buildPanelOverview({ ...dataOpts, range: 'all', includeArchived: true });
       overview.ops = describeOps(liveEndpoints());
+
+      // Gently refresh cloud quota in the background while at least one browser is connected.
+      if (sseClients.size > 0 && quotaAutoEnabled && auth.loggedIn && !auth.expired && !quotaRefreshing) {
+        const now = Date.now();
+        const quotaAge = overview.quota?.lastRefreshed ? (now - overview.quota.lastRefreshed) : Infinity;
+        if (quotaAge >= quotaAutoRefreshMs && now - lastQuotaAutoAttemptAt >= quotaAutoRefreshMs) {
+          quotaRefreshing = true;
+          lastQuotaAutoAttemptAt = now;
+          runQuotaRefresh()
+            .catch(() => null)
+            .finally(() => {
+              quotaRefreshing = false;
+              scheduleBroadcast(true);
+            });
+        }
+      }
+
       const digest = computeOverviewDigest(overview);
       if (!forceBroadcast && digest === lastDigest) return;
       lastDigest = digest;
@@ -557,6 +590,7 @@ function createPanelServer(options = {}) {
       path.join(rootDir, 'speed-cache'),
       path.join(rootDir, 'annotations'),
       path.join(rootDir, 'conversations'),
+      path.join(rootDir, 'presence'),
     ];
     for (const target of watchTargets) {
       try {
@@ -577,8 +611,22 @@ function createPanelServer(options = {}) {
         if (sseClients.size > 0) {
           maybeCheckAuthSwitchAndBroadcast(false);
         }
-      }, AUTH_POLL_INTERVAL_MS);
+      }, pollIntervalMs);
       if (typeof pollTimer.unref === 'function') pollTimer.unref();
+    }
+    if (!heartbeatTimer) {
+      heartbeatTimer = setInterval(() => {
+        if (sseClients.size === 0) return;
+        const ping = `event: ping\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
+        for (const client of sseClients) {
+          try {
+            client.write(ping);
+          } catch {
+            sseClients.delete(client);
+          }
+        }
+      }, heartbeatMs);
+      if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     }
   }
 
@@ -591,6 +639,10 @@ function createPanelServer(options = {}) {
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     while (watchers.length > 0) {
       const w = watchers.pop();
       try { w.close(); } catch {}
@@ -598,6 +650,7 @@ function createPanelServer(options = {}) {
   }
 
   const html = renderPanelHtml();
+  const uiHash = crypto.createHash('sha1').update(html).digest('hex').slice(0, 12);
   const pairingHtml = renderPairingHtml();
 
   const server = http.createServer(async (req, res) => {
@@ -686,7 +739,7 @@ function createPanelServer(options = {}) {
       }
 
       if (req.method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, rootDir, clients: sseClients.size, lan });
+        sendJson(res, 200, { ok: true, rootDir, clients: sseClients.size, lan, uiHash });
         return;
       }
 
@@ -707,6 +760,7 @@ function createPanelServer(options = {}) {
           includeArchived,
         });
         overview.ops = describeOps(liveEndpoints(5000));
+        overview.uiHash = uiHash;
         overview.viewer = local ? { local: true } : { local: false, accessExpiresAt: device.expiresAt };
         if (local && lan) {
           overview.lan = { urls: getLanUrls(listeningPort(), lanNetworks), devices: activeDevices().length };
@@ -812,7 +866,7 @@ function createPanelServer(options = {}) {
           'Cache-Control': 'no-cache, no-transform',
           'Connection': 'keep-alive',
         });
-        res.write(`event: ready\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+        res.write(`event: ready\ndata: ${JSON.stringify({ ts: Date.now(), uiHash })}\n\n`);
         res.agyRemote = !local;
         sseClients.add(res);
         startWatchers();
