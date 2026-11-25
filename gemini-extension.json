@@ -1,5 +1,5 @@
 {
   "name": "agy-check",
   "version": "0.4.0",
-  "description": "Multi-device local dashboard, session manager & HUD for Antigravity CLI (agy) — desktop, phone PWA, LAN/TUN & remote server sync"
+  "description": "Multi-device dashboard, session manager & 1-click multi-account switcher for Antigravity CLI (agy) — persistent OS-keyring auth profiles, Gemini & 3P quota, prompt cache hit rate & phone PWA"
 }

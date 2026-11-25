@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**跨多端实时查看与管理所有 Antigravity CLI（`agy`）会话——支持电脑、手机、平板、局域网 / TUN 虚拟组网，以及远程服务器部署。** 无论身在哪个屏幕前，都能实时同步查看缓存命中率、输出速度、工具耗时、上下文占用、剩余配额与估算费用，并随时重命名、归档或批量删除会话。
+**面向 Google Antigravity CLI（`agy`）的多端实时监控面板、会话管理器、配额看板与本机多账号一键切换工具——覆盖电脑、手机 PWA、平板、局域网 / TUN 虚拟组网与远程服务器。** 支持通过系统钥匙串（macOS Keychain / Linux Secret Service）**保留并持久化多份 `agy` auth 登录资料**，免重复登录一键切换账号，实时同步 Gemini 与 Third-party（3P / Claude）5h/每周配额、提示词缓存命中率、输出速度、工具耗时与估算 API 费用，并在任意屏幕随时重命名、归档或批量删除会话。
 
 [English](./README.md)
 
@@ -21,8 +21,9 @@
 ## 核心优势
 
 - **多端与远程服务器实时同步**：终端状态栏、电脑浏览器、手机/平板（PWA、6 位配对码、30 天免重登）、局域网、TUN 虚拟组网（Tailscale / ZeroTier / WireGuard）及无头服务器（`--lan --networks <cidr>` 或 SSH 隧道）全打通。
+- **持久化保存多份 `agy` auth 资料 & 一键切换账号**：将多个 Google Antigravity（`agy`）账号的完整认证资料安全持久化在系统钥匙串（`agy-check-vault`，零明文落盘），在电脑端面板顶栏或命令行随时保存、登新号、一键切号与撤销（切前自动回存、零轮询同步新号实时额度），搭配 `agy-check run` 支持跨终端原标签页原地重启、不增冗余标签。
 - **任意屏幕直接管理会话**：搜索筛选、持久化重命名（同步回写 `agy` 真实数据源，`/resume` 立即可见）、归档 / 取消归档，以及 **Select** 多选 / 全选批量归档与安全永久删除（检测运行中窗口并二次确认）。
-- **多账号与缓存洞察**：多账号 5h / 每周配额对照、系统钥匙串凭证保存与本机桌面一键切号、切号残留 `unsynced` 窗口告警、按时间范围估算 API 费用、自动标注缓存未命中原因。
+- **深度配额与缓存洞察**：多账号 Gemini 与 Third-party（3P）5h / 每周配额对照、切号残留 `unsynced` 窗口告警、按时间范围估算 API 费用、自动标注缓存未命中原因。
 - **开箱即用、纯本地零负担**：零运行时依赖、`agy` 内 `/check` 零 token 响应、无遥测，默认仅监听 `127.0.0.1`。
 
 | 想在哪里看 | 启动命令 | 说明 |
@@ -150,6 +151,8 @@ agy-check ls [--range 24h] [--sort recent]           输出会话表
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
 agy-check session <id-prefix> [--json]               逐轮缓存命中率与未命中诊断
 agy-check account [list|save|switch|sign-in|remove]  系统钥匙串多账号凭证保存、登新号与一键切换（仅本机）
+agy-check run [--owned-surface] [--] [agy args...]   以跨终端受管模式启动 agy（切号原地重启、不增标签）
+agy-check managed [list|replace|stop|close] [--json] 查看或控制受管 agy 会话
 agy-check sync [--apply]                             预览（默认）或执行账号同步
 agy-check config                                     状态栏配置向导
 agy-check update                                     更新运行时
@@ -163,8 +166,8 @@ agy-check update                                     更新运行时
 
 相比原版 [`agy-hud`](https://github.com/icebear0828/agy-hud)，状态栏新增基于 Hook 计时的输出速度（含思考总速 `out` 与扣除工具耗时后的可见净速 `net≈`）、累计工具耗时 `tooltime`、默认开启且精确计入冷启动 `0.0%` 与整会话 `avg` 的缓存命中率、原生 `antigravity-cli` 日志解析，以及按账号隔离的配额缓存。
 
-- **多账号配额、凭证保存与一键切号**：按账号邮箱保存配额快照，切号后仍可对照查看非活跃账号上次保存的余量。在 macOS（及带 `secret-tool` 的 Linux）上，本机桌面面板顶栏账号菜单与 `agy-check account` 命令行可将各账号凭证安全保存在系统钥匙串（`agy-check-vault`，零明文落盘、绝不下发浏览器），支持自动备份当前号后登录新账号以及一键切换当前 `agy` 登录（切前自动回存当前账号、写后回读校验、Undo 撤销、严格仅限本机 `127.0.0.1`，局域网/TUN 手机返回 `403`）。已打开但内存中仍持旧登录的 `agy` 窗口会在面板、CLI 和自身状态栏标为 **unsynced**。
-- **可选账号同步脚本**：若你通过 `AGY_SYNC_SCRIPT` 提供了外部脚本（默认 `~/tool-scripts/agy/agy-sync-keychain.sh`，不在本仓库内），面板会先跑 `--dry-run` 预览，本机确认后才执行；无脚本时按钮自动隐藏。
+- **多账号配额、凭证保存与零轮询同步**：按账号邮箱保存配额快照（完整支持尚未消耗、无倒计时的满额 `100%` 3P 桶），切号后仍可对照查看非活跃账号上次保存的余量。在 macOS（及带 `secret-tool` 的 Linux）上，本机桌面面板顶栏账号菜单与 `agy-check account` 命令行可将各账号凭证安全保存在系统钥匙串（`agy-check-vault`，零明文落盘、绝不下发浏览器），支持自动备份当前号后登录新账号以及一键切换当前 `agy` 登录（切前自动回存当前账号、写后回读校验、Undo 撤销、零轮询切后刷新——未过期号立刻拉取，已过期号后台串行执行单次 0-token `agy models` 尝试续期并回存——严格仅限本机 `127.0.0.1`，局域网/TUN 手机返回 `403`）。已打开但内存中仍持旧登录的 `agy` 窗口会在面板、CLI 和自身状态栏标为 **unsynced**。
+- **跨终端受管启动器与可选同步脚本**：通过 `agy-check run` 启动交互式 `agy`（兼容 iTerm2、Apple Terminal、Ghostty、WezTerm、Kitty、VS Code、tmux 及 Linux/SSH），账号同步时可在**原终端标签页原地重启**会话（`agy-check managed replace`），并干净关闭空受管标签（退出码 `0`），不再越切越多废标签。若你通过 `AGY_SYNC_SCRIPT` 提供了外部同步脚本（默认 `~/tool-scripts/agy/agy-sync-keychain.sh`，不在本仓库内），面板会先跑 `--dry-run` 预览，本机确认后才执行，并在重启完成后按严格次序触发单次额度刷新；无脚本时按钮自动隐藏。
 
 ---
 

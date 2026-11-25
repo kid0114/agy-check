@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**Monitor and manage every Antigravity CLI (`agy`) session across all your devices — desktop, phone, tablet, LAN/TUN, or remote server.** Stay synced live on cache hit rate, output speed, tool time, context use, quota, and estimated cost, and rename, archive, or bulk-delete sessions from whichever screen is in front of you.
+**Multi-device dashboard, session manager, quota monitor, and 1-click multi-account switcher for Google Antigravity CLI (`agy`) — across desktop, phone PWA, tablet, LAN/TUN, and remote servers.** Persist multiple `agy` auth profiles securely in your OS keyring (macOS Keychain / Linux Secret Service) so you can switch accounts in one click without re-logging in, sync live 5h/weekly Gemini & Third-party (3P / Claude) quota, prompt cache hit rate, output speed, and estimated API cost, and rename, archive, or bulk-delete sessions from any screen.
 
 [中文文档](./README_zh.md)
 
@@ -21,8 +21,9 @@
 ## Why agy-check
 
 - **Multi-device & remote server live sync:** Watch and control every `agy` session from terminal HUD, desktop browser, phone/tablet (PWA, 6-digit pairing, 30-day sign-in), LAN, TUN overlay (`Tailscale` / `ZeroTier` / `WireGuard`), or headless server (`--lan --networks <cidr>` or SSH tunnel).
+- **Persist multiple `agy` auth profiles & 1-click account switching:** Save and persist multiple Google Antigravity (`agy`) auth credentials byte-exact in the OS keyring (`agy-check-vault` on macOS Keychain / Linux `secret-tool`, never plaintext), sign in new accounts or switch in one click from the desktop topbar or CLI with automatic backup, Undo, zero-polling quota sync, and cross-terminal in-place session restarts (`agy-check run`).
 - **Manage sessions anywhere:** Search, rename (persisted to `agy`'s source of truth), archive/unarchive, and **Select All** bulk archive or safe permanent delete (with running-window check).
-- **Multi-account & cache visibility:** 5h/weekly quota across accounts, OS-keyring credential vault with 1-click desktop account switching, stale `unsynced` window warnings, range-based API cost estimates, and automatic cache-miss diagnosis.
+- **Deep quota & cache visibility:** 5h/weekly quota across Gemini and Third-party (3P) buckets for all saved accounts, stale `unsynced` window warnings, range-based API cost estimates, and automatic cache-miss diagnosis.
 - **Zero-effort, local-first:** Zero runtime deps, zero-token `/check` inside `agy`, no telemetry, `127.0.0.1`-only until you enable `--lan`.
 
 | Where you want to view | Command | Notes |
@@ -150,6 +151,8 @@ agy-check ls [--range 24h] [--sort recent]           Print the session table
    [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]
 agy-check session <id-prefix> [--json]               Per-turn cache hit rate and miss diagnosis
 agy-check account [list|save|switch|sign-in|remove]  Manage saved agy credentials in OS keyring (local only)
+agy-check run [--owned-surface] [--] [agy args...]   Launch agy under managed supervisor (in-place sync restart)
+agy-check managed [list|replace|stop|close] [--json] Inspect or control managed agy sessions
 agy-check sync [--apply]                             Preview (default) or run account sync
 agy-check config                                     Status line configuration wizard
 agy-check update                                     Update the runtime
@@ -163,8 +166,8 @@ agy-check update                                     Update the runtime
 
 Compared with upstream [`agy-hud`](https://github.com/icebear0828/agy-hud), the status line adds hook-timed output speed (`out` total with thinking and `net≈` visible text speed, excluding tool wait), cumulative `tooltime`, exact on-by-default cache hit rate (`0.0%` cold turns + whole-session `avg`), native `antigravity-cli` transcript parsing, and per-account quota caching.
 
-- **Multi-account quota, saved credentials & drift detection:** Quota snapshots are cached per account email so you can view inactive accounts' last saved quota alongside the active login. On macOS (and Linux with `secret-tool`), the topbar account menu on the local desktop panel and `agy-check account` CLI can save accounts into the OS keyring (`agy-check-vault`, never plaintext or sent to the browser), start signing in a new account (auto-backing up the active login first), and switch the active `agy` login in one click (with automatic backup before overwrite, read-back verification, Undo toast, and strict `127.0.0.1`-only enforcement — `403` for paired phones). After switching accounts, older `agy` windows that still hold the previous login in memory are flagged **unsynced** in the dashboard, CLI, and their own status line.
-- **Optional Sync sessions script:** If you provide a script via `AGY_SYNC_SCRIPT` (default `~/tool-scripts/agy/agy-sync-keychain.sh`, not included in this repo), the dashboard runs `--dry-run` first and executes only after explicit local confirmation. The button stays hidden when no script is present.
+- **Multi-account quota, saved credentials & zero-polling sync:** Quota snapshots are cached per account email (including unused 100% 3P buckets without a reset timer) so you can view inactive accounts' last saved quota alongside the active login. On macOS (and Linux with `secret-tool`), the topbar account menu on the local desktop panel and `agy-check account` CLI save accounts into the OS keyring (`agy-check-vault`, never plaintext or sent to the browser), start signing in a new account (auto-backing up the active login first), and switch the active `agy` login in one click (with automatic backup before overwrite, read-back verification, Undo toast, zero-polling post-switch quota refresh — immediate for fresh tokens and serialized 0-token `agy models` refresh for expired tokens — and strict `127.0.0.1`-only enforcement, returning `403` for paired phones). After switching accounts, older `agy` windows that still hold the previous login in memory are flagged **unsynced** in the dashboard, CLI, and their own status line.
+- **Cross-terminal managed launcher & optional Sync sessions script:** Launch interactive `agy` via `agy-check run` (works across iTerm2, Apple Terminal, Ghostty, WezTerm, Kitty, VS Code, tmux, and Linux/SSH) so account sync restarts active sessions **in-place** on the same terminal tab (`agy-check managed replace`) and closes empty owned tabs cleanly with exit `0` instead of accumulating dead tabs. If you provide a sync script via `AGY_SYNC_SCRIPT` (default `~/tool-scripts/agy/agy-sync-keychain.sh`, not included in this repo), the dashboard runs `--dry-run` first and executes only after explicit local confirmation, emitting a single strictly ordered post-sync quota refresh. The button stays hidden when no script is present.
 
 ---
 
