@@ -8,8 +8,9 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { resolveAntigravityPath } = require('./paths.js');
 const { refreshQuotaNow } = require('./quota.js');
-const { buildPanelOverview, getSessionDetail, renameConversationTitle } = require('./panel-data.js');
+const { buildPanelOverview, getSessionDetail, renameConversationTitle, collectAllSessions } = require('./panel-data.js');
 const { inspectLiveAuth, previewAccountSync, executeAccountSync } = require('./account-sync.js');
+const { getLiveEndpoints, describeOps, setConversationsArchived, deleteConversations } = require('./conversation-ops.js');
 const { renderPanelHtml, renderPairingHtml } = require('./panel-ui.js');
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -409,7 +410,9 @@ function computeOverviewDigest(overview) {
       netSpd: s.speed?.visibleSpeed ?? null,
       toolMs: s.toolDurationMs ?? null,
       upd: s.lastActivityMs,
+      arch: Boolean(s.archived),
     })),
+    ops: overview.ops ? { del: Boolean(overview.ops.deleteAvailable), n: overview.ops.endpointCount || 0 } : null,
   };
   return crypto.createHash('sha1').update(JSON.stringify(stripped)).digest('hex');
 }
@@ -468,6 +471,7 @@ function createPanelServer(options = {}) {
   };
   const transcriptCache = new Map();
   const summaryCache = {};
+  const annotationsCache = {};
   const sseClients = new Set();
   const watchers = [];
   let debounceTimer = null;
@@ -480,7 +484,21 @@ function createPanelServer(options = {}) {
     rootDir,
     transcriptCache,
     summaryCache,
+    annotationsCache,
     ...(options.dataOptions || {}),
+  };
+
+  // agy API endpoints (daemon env + `agy-check panel handoff`). Tokens never leave this process.
+  const endpointsProvider = typeof options.endpointsProvider === 'function'
+    ? options.endpointsProvider
+    : (options.lsEndpoint === false ? () => [] : () => getLiveEndpoints({ rootDir }));
+  let endpointsCache = { at: 0, list: [] };
+  const liveEndpoints = (maxAgeMs = 0) => {
+    if (maxAgeMs > 0 && Date.now() - endpointsCache.at < maxAgeMs) return endpointsCache.list;
+    let list = [];
+    try { list = endpointsProvider() || []; } catch { list = []; }
+    endpointsCache = { at: Date.now(), list };
+    return list;
   };
 
   async function maybeCheckAuthSwitchAndBroadcast(forceBroadcast = false) {
@@ -503,7 +521,8 @@ function createPanelServer(options = {}) {
       }
       lastSeenAccountKey = acctKey;
 
-      const overview = await buildPanelOverview({ ...dataOpts, range: 'all' });
+      const overview = await buildPanelOverview({ ...dataOpts, range: 'all', includeArchived: true });
+      overview.ops = describeOps(liveEndpoints());
       const digest = computeOverviewDigest(overview);
       if (!forceBroadcast && digest === lastDigest) return;
       lastDigest = digest;
@@ -536,12 +555,14 @@ function createPanelServer(options = {}) {
       rootDir,
       path.join(rootDir, 'sessions'),
       path.join(rootDir, 'speed-cache'),
+      path.join(rootDir, 'annotations'),
     ];
     for (const target of watchTargets) {
       try {
         if (!fs.existsSync(target)) continue;
         const w = fs.watch(target, { persistent: false }, (_eventType, filename) => {
           if (filename && String(filename).includes('.tmp.')) return;
+          if (target === rootDir) endpointsCache.at = 0;
           scheduleBroadcast(false);
         });
         w.on('error', () => {});
@@ -674,6 +695,7 @@ function createPanelServer(options = {}) {
         const sort = reqUrl.searchParams.get('sort') || 'recent';
         const account = reqUrl.searchParams.get('account') || 'all';
         const includeEmpty = reqUrl.searchParams.get('empty') === '1';
+        const includeArchived = reqUrl.searchParams.get('archived') === '1';
         const overview = await buildPanelOverview({
           ...dataOpts,
           range,
@@ -681,7 +703,9 @@ function createPanelServer(options = {}) {
           sort,
           account,
           includeEmpty,
+          includeArchived,
         });
+        overview.ops = describeOps(liveEndpoints(5000));
         overview.viewer = local ? { local: true } : { local: false, accessExpiresAt: device.expiresAt };
         if (local && lan) {
           overview.lan = { urls: getLanUrls(listeningPort(), lanNetworks), devices: activeDevices().length };
@@ -711,7 +735,7 @@ function createPanelServer(options = {}) {
         const renamer = options.sessionRenamer || ((convId, title) => renameConversationTitle(convId, title, {
           rootDir,
           summaryCache,
-          ...(options.lsEndpoint !== undefined ? { lsEndpoint: options.lsEndpoint } : {}),
+          lsEndpoint: options.lsEndpoint !== undefined ? options.lsEndpoint : (liveEndpoints()[0] || false),
         }));
         const result = await renamer(id, body?.title);
         if (!result || !result.ok) {
@@ -720,6 +744,53 @@ function createPanelServer(options = {}) {
         }
         scheduleBroadcast(true);
         sendJson(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && (pathname === '/api/sessions/archive' || pathname === '/api/sessions/delete')) {
+        if (!(local ? isSameOriginLocalRequest(req) : isSameOriginRemoteRequest(req))) {
+          sendJson(res, 403, { ok: false, error: 'Forbidden origin' });
+          return;
+        }
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
+          return;
+        }
+        const ids = Array.isArray(body?.ids) ? body.ids : [];
+        let result;
+        if (pathname === '/api/sessions/archive') {
+          result = await setConversationsArchived(ids, body?.archived !== false, {
+            rootDir,
+            endpoints: liveEndpoints(),
+          });
+        } else {
+          const collected = collectAllSessions({
+            rootDir,
+            transcriptCache,
+            summaryCache,
+            annotationsCache,
+            includeTurns: false,
+            ...(dataOpts.runningSessions ? { runningSessions: dataOpts.runningSessions } : {}),
+          });
+          const sessionInfo = new Map(collected.sessions.map(s => [s.conversationId, { title: s.title, isGenerating: s.isGenerating }]));
+          result = await deleteConversations(ids, {
+            rootDir,
+            endpoints: liveEndpoints(),
+            runningSessions: collected.runningSessions,
+            closeRunning: body?.closeRunning === true,
+            confirm: body?.confirm,
+            sessionInfo,
+            ...(options.opsDeps ? { deps: options.opsDeps } : {}),
+          });
+          delete summaryCache.stamp;
+          delete summaryCache.map;
+        }
+        if (result && Array.isArray(result.results)) scheduleBroadcast(true);
+        const { status, ...payload } = result || { ok: false, error: 'Operation failed' };
+        sendJson(res, status || 200, payload);
         return;
       }
 

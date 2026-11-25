@@ -569,11 +569,12 @@ function skipTextProtoString(text, i) {
 }
 
 /**
- * Finds the span of a top-level string field (`name: "..."`, including any
- * adjacent concatenated literals) in a protobuf text-format document.
- * Ignores matches inside nested messages, strings, and comments.
+ * Finds the span of a top-level field (`name: "..."` with any adjacent
+ * concatenated string literals, or `name: scalar`) in a protobuf text-format
+ * document. Ignores matches inside nested messages, strings, and comments.
+ * Returns `{ start, end, valueStart, kind: 'string' | 'scalar' }` or null.
  */
-function findTopLevelTextProtoStringField(text, fieldName) {
+function findTopLevelTextProtoField(text, fieldName) {
   const n = text.length;
   let i = 0;
   let depth = 0;
@@ -607,7 +608,12 @@ function findTopLevelTextProtoStringField(text, fieldName) {
               if (text[p] === '"' || text[p] === "'") end = skipTextProtoString(text, p);
               else break;
             }
-            return { start: i, end };
+            return { start: i, end, valueStart: k, kind: 'string' };
+          }
+          if (k < n && /[A-Za-z0-9_.+-]/.test(text[k])) {
+            let end = k;
+            while (end < n && /[A-Za-z0-9_.+-]/.test(text[end])) end++;
+            return { start: i, end, valueStart: k, kind: 'scalar' };
           }
         }
       }
@@ -623,27 +629,39 @@ function escapeTextProtoString(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/**
- * Sets a top-level string field in a protobuf text-format document while
- * preserving every other field byte-for-byte (agy stores conversation
- * annotations such as `title`, `starred`, `pinned` and `tags` this way).
- */
-function setTextProtoStringField(text, fieldName, value) {
+function setTextProtoFieldLiteral(text, fieldName, literalValue) {
   const src = typeof text === 'string' ? text : '';
-  const literal = `${fieldName}:"${escapeTextProtoString(value)}"`;
-  const span = findTopLevelTextProtoStringField(src, fieldName);
+  const literal = `${fieldName}:${literalValue}`;
+  const span = findTopLevelTextProtoField(src, fieldName);
   if (span) return src.slice(0, span.start) + literal + src.slice(span.end);
   const rest = src.trim();
   return rest ? `${literal}  ${rest}` : literal;
 }
 
 /**
- * Writes the conversation title into agy's source of truth for user-editable
- * metadata: `annotations/<id>.pbtxt`. agy's language server re-reads this file
- * and regenerates `conversation_summaries.db` from it, so a title written only
- * to the SQLite index is reverted on the next summary rewrite.
+ * Sets a top-level string field in a protobuf text-format document while
+ * preserving every other field byte-for-byte (agy stores conversation
+ * annotations such as `title`, `starred`, `pinned` and `tags` this way).
  */
-function writeAnnotationsTitle(baseDir, conversationId, title) {
+function setTextProtoStringField(text, fieldName, value) {
+  return setTextProtoFieldLiteral(text, fieldName, `"${escapeTextProtoString(value)}"`);
+}
+
+/** Sets a top-level bool field (e.g. `archived:true`), preserving other fields. */
+function setTextProtoBoolField(text, fieldName, value) {
+  return setTextProtoFieldLiteral(text, fieldName, value ? 'true' : 'false');
+}
+
+/** Reads a top-level bool field; returns false when absent. */
+function readTextProtoBoolField(text, fieldName) {
+  const src = typeof text === 'string' ? text : '';
+  const span = findTopLevelTextProtoField(src, fieldName);
+  if (!span || span.kind !== 'scalar') return false;
+  const v = src.slice(span.valueStart, span.end).toLowerCase();
+  return v === 'true' || v === 't' || v === '1';
+}
+
+function writeAnnotationsText(baseDir, conversationId, transform) {
   const dir = path.join(baseDir, 'annotations');
   const file = path.join(dir, `${conversationId}.pbtxt`);
   let previous = '';
@@ -656,7 +674,7 @@ function writeAnnotationsTitle(baseDir, conversationId, title) {
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
   }
-  const next = setTextProtoStringField(previous, 'title', title);
+  const next = transform(previous);
   if (existed && next === previous) return { file, changed: false };
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.agy-check-${conversationId}.${process.pid}.${Date.now()}.tmp`);
@@ -668,6 +686,61 @@ function writeAnnotationsTitle(baseDir, conversationId, title) {
     throw err;
   }
   return { file, changed: true };
+}
+
+/** Sets `archived` in agy's `annotations/<id>.pbtxt`, preserving other fields. */
+function writeAnnotationsArchived(baseDir, conversationId, archived) {
+  return writeAnnotationsText(baseDir, conversationId, (prev) => setTextProtoBoolField(prev, 'archived', archived));
+}
+
+/**
+ * Reads the `archived` flag of every conversation from `annotations/*.pbtxt`,
+ * cached per file by mtime/size. Returns a Set of archived conversation IDs.
+ */
+function loadArchivedConversationIds(baseDir, cache = null) {
+  const dir = path.join(baseDir, 'annotations');
+  const store = cache && typeof cache === 'object' ? cache : {};
+  if (!(store.files instanceof Map)) store.files = new Map();
+  const archived = new Set();
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    store.files.clear();
+    return archived;
+  }
+  const seen = new Set();
+  for (const name of names) {
+    if (name.startsWith('.') || !name.endsWith('.pbtxt')) continue;
+    const id = name.slice(0, -'.pbtxt'.length);
+    seen.add(id);
+    const file = path.join(dir, name);
+    let st;
+    try { st = fs.statSync(file); } catch { continue; }
+    const stamp = `${st.mtimeMs}:${st.size}`;
+    let entry = store.files.get(id);
+    if (!entry || entry.stamp !== stamp) {
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8'); } catch {}
+      entry = { stamp, archived: readTextProtoBoolField(text, 'archived') };
+      store.files.set(id, entry);
+    }
+    if (entry.archived) archived.add(id);
+  }
+  for (const id of [...store.files.keys()]) {
+    if (!seen.has(id)) store.files.delete(id);
+  }
+  return archived;
+}
+
+/**
+ * Writes the conversation title into agy's source of truth for user-editable
+ * metadata: `annotations/<id>.pbtxt`. agy's language server re-reads this file
+ * and regenerates `conversation_summaries.db` from it, so a title written only
+ * to the SQLite index is reverted on the next summary rewrite.
+ */
+function writeAnnotationsTitle(baseDir, conversationId, title) {
+  return writeAnnotationsText(baseDir, conversationId, (prev) => setTextProtoStringField(prev, 'title', title));
 }
 
 /**
@@ -687,11 +760,11 @@ function resolveLsEndpoint(env = process.env) {
 }
 
 /**
- * Calls the documented `ConversationService/UpdateConversation` API on agy's
- * local language server. Resolves `{ ok, status?, error? }`; never rejects and
- * never includes the CSRF token in its result.
+ * Calls a documented `product.v1.ConversationService/<method>` endpoint on agy's
+ * local language server. Resolves `{ ok, status?, data?, error? }`; never
+ * rejects and never includes the CSRF token in its result.
  */
-function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutMs = 2500) {
+function callLsConversationService(endpoint, method, payload, timeoutMs = 2500) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (value) => {
@@ -700,14 +773,18 @@ function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutM
         resolve(value);
       }
     };
-    const body = JSON.stringify({ conversationId, annotations: { title } });
+    if (!endpoint || typeof endpoint !== 'object' || !endpoint.port || !endpoint.csrfToken || !/^[A-Za-z]+$/.test(String(method))) {
+      done({ ok: false, error: 'invalid agy API request' });
+      return;
+    }
+    const body = JSON.stringify(payload || {});
     let req;
     try {
       req = http.request({
-        host: endpoint.host,
+        host: endpoint.host || '127.0.0.1',
         port: endpoint.port,
         method: 'POST',
-        path: '/product.v1.ConversationService/UpdateConversation',
+        path: `/product.v1.ConversationService/${method}`,
         headers: {
           'Content-Type': 'application/json',
           'Connect-Protocol-Version': '1',
@@ -720,16 +797,14 @@ function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutM
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
+          let data = null;
+          try { data = text ? JSON.parse(text) : {}; } catch {}
           if (res.statusCode !== 200) {
-            done({ ok: false, status: res.statusCode, error: `agy API HTTP ${res.statusCode}` });
+            const msg = data && typeof data.message === 'string' ? `: ${data.message.slice(0, 200)}` : '';
+            done({ ok: false, status: res.statusCode, data, error: `agy API HTTP ${res.statusCode}${msg}` });
             return;
           }
-          let parsed = null;
-          try { parsed = JSON.parse(text); } catch {}
-          const conv = parsed && (parsed.conversation || parsed);
-          const got = conv && conv.annotations ? conv.annotations.title : undefined;
-          if (got === title) done({ ok: true, status: 200 });
-          else done({ ok: false, status: 200, error: 'agy API did not confirm the new title' });
+          done({ ok: true, status: 200, data: data || {} });
         });
         res.on('error', (err) => done({ ok: false, error: err.code || err.message }));
       });
@@ -741,6 +816,15 @@ function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutM
     req.on('error', (err) => done({ ok: false, error: err.code || err.message }));
     req.end(body);
   });
+}
+
+async function callLsUpdateConversationTitle(endpoint, conversationId, title, timeoutMs = 2500) {
+  const res = await callLsConversationService(endpoint, 'UpdateConversation', { conversationId, annotations: { title } }, timeoutMs);
+  if (!res.ok) return { ok: false, status: res.status, error: res.error };
+  const conv = res.data && (res.data.conversation || res.data);
+  const got = conv && conv.annotations ? conv.annotations.title : undefined;
+  if (got === title) return { ok: true, status: 200 };
+  return { ok: false, status: 200, error: 'agy API did not confirm the new title' };
 }
 
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1369,6 +1453,7 @@ function collectAllSessions(options = {}) {
     now = Date.now(),
     transcriptCache = null,
     summaryCache = null,
+    annotationsCache = null,
     includeTurns = false,
     auth = null,
     runningSessions = null,
@@ -1376,6 +1461,7 @@ function collectAllSessions(options = {}) {
 
   const baseDir = rootDir || resolveAntigravityPath('');
   const brainDir = path.join(baseDir, 'brain');
+  const archivedIds = loadArchivedConversationIds(baseDir, annotationsCache);
   const snapshots = readAllSessionSnapshots(baseDir);
   const timings = readAllHookTimings(baseDir);
   const summaries = loadConversationSummaries(baseDir, summaryCache);
@@ -1504,6 +1590,9 @@ function collectAllSessions(options = {}) {
       shortId: id.slice(0, 8),
       title,
       canRename: Boolean(summaryInfo),
+      archived: archivedIds.has(id),
+      canArchive: true,
+      canDelete: true,
       status,
       isRunning: Boolean(running),
       isGenerating,
@@ -1555,6 +1644,9 @@ function collectAllSessions(options = {}) {
       shortId: `pid:${proc.pid}`,
       title: 'New / idle agy window (no conversation yet)',
       canRename: false,
+      archived: false,
+      canArchive: false,
+      canDelete: false,
       status: 'running',
       isRunning: true,
       isGenerating: false,
@@ -1716,6 +1808,7 @@ async function buildPanelOverview(options = {}) {
     runningSessions = null,
     quotaFetcher = null,
     accountStorePath = null,
+    annotationsCache = null,
   } = options;
 
   const baseDir = rootDir || resolveAntigravityPath('');
@@ -1772,6 +1865,7 @@ async function buildPanelOverview(options = {}) {
     now,
     transcriptCache,
     summaryCache,
+    annotationsCache,
     includeTurns: false,
     auth,
     runningSessions,
@@ -1781,9 +1875,13 @@ async function buildPanelOverview(options = {}) {
   const acctFilter = String(account || '').trim().toLowerCase();
   const includeEmpty = options.includeEmpty === true;
 
+  const includeArchived = options.includeArchived === true;
+
   const isEmptyNonRunning = (s) => !s.isRunning && s.turnsCount === 0 && (s.hasTranscript || s.steps === 0);
   const hiddenEmptyCount = allSessions.filter(isEmptyNonRunning).length;
-  const eligibleSessions = includeEmpty ? allSessions : allSessions.filter(s => !isEmptyNonRunning(s));
+  const nonEmptySessions = includeEmpty ? allSessions : allSessions.filter(s => !isEmptyNonRunning(s));
+  const archivedCount = nonEmptySessions.filter(s => s.archived).length;
+  const eligibleSessions = includeArchived ? nonEmptySessions : nonEmptySessions.filter(s => !s.archived);
 
   const filtered = eligibleSessions.filter(s => {
     if (!matchesTimeRange(s, range, now)) return false;
@@ -1812,6 +1910,7 @@ async function buildPanelOverview(options = {}) {
   const sorted = sortSessions(filtered, sort, range);
   const summary = aggregateSummary(sorted, eligibleSessions.length, liveRunning);
   summary.hiddenEmptyCount = hiddenEmptyCount;
+  summary.archivedCount = archivedCount;
   summary.cost = buildCostSummary(sorted, eligibleSessions, range);
 
   const syncScriptPath = resolveSyncScriptPath();
@@ -1847,6 +1946,7 @@ async function getSessionDetail(idOrPrefix, options = {}) {
     now = Date.now(),
     transcriptCache = null,
     summaryCache = null,
+    annotationsCache = null,
     authOptions = {},
     runningSessions = null,
   } = options;
@@ -1861,6 +1961,7 @@ async function getSessionDetail(idOrPrefix, options = {}) {
     now,
     transcriptCache,
     summaryCache,
+    annotationsCache,
     includeTurns: true,
     auth,
     runningSessions,
@@ -1886,8 +1987,15 @@ module.exports = {
   getSqliteCacheStamp,
   updateSummaryBlobTitle,
   setTextProtoStringField,
+  setTextProtoBoolField,
+  readTextProtoBoolField,
   writeAnnotationsTitle,
+  writeAnnotationsArchived,
+  loadArchivedConversationIds,
   resolveLsEndpoint,
+  callLsConversationService,
+  querySqliteJson,
+  sqlHexText,
   renameConversationTitle,
   loadConversationSummaries,
   readAllHookTimings,

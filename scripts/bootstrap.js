@@ -17,6 +17,7 @@ const RUNTIME_FILES = [
   'runtime/bin/agy-hud.js',
   'runtime/check-hook.js',
   'runtime/config.js',
+  'runtime/conversation-ops.js',
   'runtime/cost.js',
   'runtime/daily-cost.js',
   'runtime/encoding.js',

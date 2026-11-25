@@ -247,6 +247,7 @@ function getHelpText() {
     '     [--lan] [--networks <cidr,...>|none]       Let phones on Wi-Fi/Ethernet (and saved networks) pair with a code',
     '  panel pair | panel revoke                     New phone pairing code | sign out all paired phones',
     '  panel stop                                    Stop the background WebUI panel daemon',
+    '  panel handoff                                 Give the panel this agy window\'s API connection (run via an agy agent)',
     '  ls [--range 24h] [--sort recent]              Print a static multi-session summary table',
     '     [--account all|unsynced|email] [--q text] [--limit 20] [--refresh] [--json]',
     '  session <id-prefix> [--json]       Inspect per-turn cache hit rate & miss diagnosis for one session',
@@ -283,6 +284,17 @@ async function runPanelCli(argv = process.argv.slice(2)) {
   }
 
   if (command === 'panel' || command === 'web' || command === 'serve') {
+    if (args[0] === 'handoff') {
+      const { handoffEndpoint } = require('./conversation-ops.js');
+      const res = handoffEndpoint();
+      if (!res.ok) {
+        process.stderr.write(`${res.error}\n`);
+        return 1;
+      }
+      process.stdout.write(`Handed this agy window's API connection (agy PID ${res.agyPid}) to the agy-check panel. Permanent delete is available while this window stays open (${res.endpointCount} connection(s) stored).\n`);
+      return 0;
+    }
+
     if (args[0] === 'stop') {
       const res = await stopPanelDaemon();
       if (res.stopped) {

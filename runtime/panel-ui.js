@@ -311,7 +311,7 @@ function renderPanelHtml() {
     /* Sessions table */
     .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .table-scroll { overflow-x: auto; }
-    table.sessions { width: 100%; min-width: 1060px; border-collapse: collapse; }
+    table.sessions { width: 100%; min-width: 1100px; border-collapse: collapse; }
     table.sessions th {
       text-align: left;
       font-size: 12px;
@@ -515,6 +515,92 @@ function renderPanelHtml() {
     .modal-status { margin-top: 12px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
+    /* Selection, bulk actions and session ops (archive / delete) */
+    table.sessions th.c-sel, table.sessions td.c-sel { width: 46px; padding: 0 0 0 6px; text-align: center; }
+    .sel-hit { display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; cursor: pointer; }
+    .sel-hit input, #selectAll { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+    #selectAll:disabled { cursor: default; opacity: 0.4; }
+    #sessionsBody > tr.checked:not(.selected) > td { background: rgba(124, 156, 255, 0.07); }
+    #sessionsBody > tr.archived > td:not(.c-sel) { opacity: 0.55; }
+    #sessionsBody > tr.archived:hover > td:not(.c-sel), #sessionsBody > tr.archived.selected > td:not(.c-sel) { opacity: 0.85; }
+    .btn.danger { background: var(--red-soft); border-color: rgba(240, 100, 106, 0.45); color: var(--red); }
+    .btn.danger:hover { background: rgba(240, 100, 106, 0.2); }
+    .btn.danger.solid { background: var(--red); border-color: var(--red); color: #0b0c0f; }
+    .btn.danger.solid:hover { background: #ff7d82; }
+    .ops-wrap { display: inline-flex; }
+    .ops-wrap > .btn:disabled { pointer-events: none; }
+    .ops-wrap.blocked { cursor: not-allowed; }
+    .bulk-bar {
+      position: fixed;
+      left: 50%;
+      bottom: calc(18px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      gap: 8px 10px;
+      flex-wrap: wrap;
+      max-width: calc(100vw - 24px);
+      padding: 8px 10px 8px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    }
+    .bulk-count { font-weight: 600; white-space: nowrap; }
+    .bulk-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    body.bulk-open .app { padding-bottom: 120px; }
+    .toast {
+      position: fixed;
+      top: calc(72px + env(safe-area-inset-top));
+      right: 24px;
+      z-index: 120;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      width: min(440px, calc(100vw - 24px));
+      padding: 12px 10px 12px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--accent);
+      border-radius: 10px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+      font-size: 13px;
+    }
+    .toast.ok { border-left-color: var(--green); }
+    .toast.warn { border-left-color: var(--amber); }
+    .toast.bad { border-left-color: var(--red); }
+    .toast-body { flex: 1; min-width: 0; padding-top: 4px; overflow-wrap: anywhere; }
+    .op-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+    .handoff { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--text-2); }
+    .handoff code { font-size: 12px; }
+    .ops-note { margin-top: 6px; font-size: 12px; color: var(--amber); line-height: 1.4; }
+    #deleteModal .modal { max-width: 580px; }
+    .del-list { list-style: none; margin: 0 0 14px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); max-height: 240px; overflow-y: auto; }
+    .del-list li { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+    .del-list li:first-child { border-top: 0; }
+    .del-list .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .del-list .id { flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+    .del-list li.more-row { color: var(--muted); }
+    .del-list li.run { flex-direction: column; align-items: stretch; gap: 3px; }
+    .run-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    .run-meta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .run-gen { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--red); }
+    .del-warn { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(240, 100, 106, 0.4); background: var(--red-soft); color: #f7a8ab; font-size: 13px; }
+    .del-warn strong { color: var(--red); }
+    .del-confirm-label { display: block; margin-bottom: 6px; font-size: 12.5px; color: var(--text-2); }
+    .del-input { width: 100%; font-family: var(--mono); letter-spacing: 0.08em; }
+    .check-row { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(240, 100, 106, 0.45); background: var(--surface-2); font-size: 13px; font-weight: 500; cursor: pointer; }
+    .check-row input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--red); cursor: pointer; }
+    .del-status { margin-top: 12px; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+    .del-status:empty { display: none; }
+    .del-status.ok { color: var(--green); }
+    .del-status.warn { color: var(--amber); }
+    .del-status.bad { color: var(--red); }
+    #deleteResults { margin: 10px 0 0; }
+    .spin { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* Semantic text tones (declared last so they win over muted defaults) */
     .t-ok { color: var(--green); }
     .t-warn { color: var(--amber); }
@@ -647,6 +733,23 @@ function renderPanelHtml() {
       table.turns th:last-child, table.turns td:last-child { padding-right: 16px; }
       table.turns td.diag { min-width: 0; }
       .modal { padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
+
+      /* Selection checkbox pinned to the card's left edge, with a 44px touch target. */
+      #sessionsBody > tr[data-id] { position: relative; padding-left: 52px; }
+      #sessionsBody > tr.checked:not(.selected) { background: rgba(124, 156, 255, 0.07); }
+      #sessionsBody > tr[data-id] > td.c-sel { position: absolute; left: 4px; top: 6px; width: 44px; }
+      .sel-hit { width: 44px; min-height: 44px; }
+      .sel-hit input { width: 20px; height: 20px; }
+      .bulk-bar { left: 10px; right: 10px; transform: none; max-width: none; padding: 10px 12px; }
+      .bulk-count { flex: 1 1 auto; }
+      .bulk-actions { flex: 1 1 100%; flex-wrap: nowrap; }
+      .bulk-actions > .btn, .bulk-actions > .ops-wrap { flex: 1 1 0; min-width: 0; }
+      .bulk-actions .btn { justify-content: center; padding: 0 8px; }
+      .bulk-actions > .ops-wrap > .btn { flex: 1; }
+      body.bulk-open .app { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+      .toast { left: 12px; right: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); }
+      .drawer-actions .act-label { display: none; }
+      .drawer-actions .btn.sm { padding: 0 10px; }
     }
   </style>
 </head>
@@ -728,6 +831,7 @@ function renderPanelHtml() {
           <input id="searchInput" class="field search" type="search" placeholder="Search title, dir, branch, model, ID" />
           <select id="accountFilter" class="field" hidden></select>
           <button id="btnToggleEmpty" class="btn toggle" aria-pressed="false">Show empty</button>
+          <button id="btnToggleArchived" class="btn toggle" aria-pressed="false">Show archived</button>
           <button id="btnToggleCost" class="btn toggle" aria-pressed="false">Show cost</button>
         </div>
       </div>
@@ -735,6 +839,7 @@ function renderPanelHtml() {
         <table id="sessTable" class="sessions hide-cost">
           <thead>
             <tr>
+              <th class="c-sel"><label class="sel-hit" title="Select all visible sessions"><input id="selectAll" type="checkbox" aria-label="Select all visible sessions" /></label></th>
               <th data-sort="recent" title="Sort by activity">Status<span class="ind"></span></th>
               <th>Session</th>
               <th>Model</th>
@@ -748,7 +853,7 @@ function renderPanelHtml() {
             </tr>
           </thead>
           <tbody id="sessionsBody">
-            <tr><td colspan="10" class="empty">Loading sessions…</td></tr>
+            <tr><td colspan="11" class="empty">Loading sessions…</td></tr>
           </tbody>
         </table>
       </div>
@@ -774,8 +879,19 @@ function renderPanelHtml() {
           </div>
         </form>
         <div id="renameNote" class="rename-note" hidden></div>
+        <div id="detailOpsNote" class="ops-note" hidden></div>
       </div>
       <div class="drawer-actions">
+        <button id="btnArchiveDetail" class="btn sm" type="button" hidden aria-label="Archive session">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          <span id="btnArchiveDetailLabel" class="act-label">Archive</span>
+        </button>
+        <span id="detailDeleteWrap" class="ops-wrap" hidden>
+          <button id="btnDeleteDetail" class="btn sm danger" type="button" aria-label="Delete session permanently">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            <span class="act-label">Delete</span>
+          </button>
+        </span>
         <button id="btnCopyResume" class="btn sm">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
           <span id="btnCopyResumeLabel">Copy resume command</span>
@@ -810,10 +926,52 @@ function renderPanelHtml() {
     </div>
   </aside>
 
+  <div id="bulkBar" class="bulk-bar" role="region" aria-label="Bulk session actions" hidden>
+    <span id="bulkCount" class="bulk-count">0 selected</span>
+    <div class="bulk-actions">
+      <button id="btnBulkArchive" class="btn sm" type="button" aria-label="Archive selected sessions">Archive</button>
+      <button id="btnBulkUnarchive" class="btn sm" type="button" aria-label="Unarchive selected sessions">Unarchive</button>
+      <span id="bulkDeleteWrap" class="ops-wrap">
+        <button id="btnBulkDelete" class="btn sm danger" type="button" aria-label="Delete selected sessions permanently">Delete</button>
+      </span>
+      <button id="btnBulkClear" class="btn sm ghost" type="button" aria-label="Clear selection">Clear</button>
+    </div>
+  </div>
+
+  <div id="opToast" class="toast" role="status" aria-live="polite" hidden>
+    <div id="opToastBody" class="toast-body"></div>
+    <button id="btnToastClose" class="btn ghost icon sm-icon" type="button" aria-label="Dismiss notification">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+
+  <div id="deleteModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+    <div class="modal">
+      <h2 id="deleteModalTitle">Permanently delete session</h2>
+      <div id="deleteWarn" class="del-warn"></div>
+      <ul id="deleteList" class="del-list"></ul>
+      <div id="deleteConfirmWrap">
+        <label for="deleteConfirmInput" class="del-confirm-label">Type <code>DELETE</code> to confirm permanent deletion</label>
+        <input id="deleteConfirmInput" class="field del-input" type="text" autocomplete="off" spellcheck="false" placeholder="DELETE" aria-label="Type DELETE to confirm" />
+      </div>
+      <label id="deleteCloseRow" class="check-row" hidden>
+        <input id="deleteCloseCheck" type="checkbox" />
+        <span id="deleteCloseLabel">Close these open agy window(s) and permanently delete the selected session(s)</span>
+      </label>
+      <div id="deleteStatus" class="del-status" role="status"></div>
+      <div id="deleteHandoff" class="handoff" hidden></div>
+      <ul id="deleteResults" class="del-list" hidden></ul>
+      <div class="modal-actions">
+        <button id="btnDeleteCancel" class="btn" type="button">Cancel</button>
+        <button id="btnDeleteConfirm" class="btn danger solid" type="button" disabled>Delete permanently</button>
+      </div>
+    </div>
+  </div>
+
   <div id="lanModal" class="modal-backdrop">
     <div class="modal">
       <h2>Open on a phone</h2>
-      <p>On the phone, open one of these addresses and enter the pairing code. A paired phone stays signed in for 30 days and can view this panel, refresh quota and rename sessions; account sync stays on this Mac.</p>
+      <p>On the phone, open one of these addresses and enter the pairing code. A paired phone stays signed in for 30 days and can view this panel, refresh quota, rename, archive and delete sessions; account sync stays on this Mac.</p>
       <div id="lanLinks" class="lan-links"></div>
       <div class="pair-code-box">
         <div class="muted small">Pairing code</div>
@@ -847,7 +1005,7 @@ function renderPanelHtml() {
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const SESSION_COLS = 10;
+    const SESSION_COLS = 11;
     const PREFS_KEY = 'agy-check.panel.prefs.v2';
     const RANGES = { active: 'Active sessions', '24h': 'Last 24 hours', today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', all: 'All time' };
     const RANGE_COST_UNIT = { active: 'active sessions', '24h': 'last 24h', today: 'today', '7d': 'last 7 days', '30d': 'last 30 days', all: 'all time' };
@@ -864,7 +1022,12 @@ function renderPanelHtml() {
       account: 'all',
       showCost: true,
       showEmpty: false,
+      showArchived: false,
       selectedId: null,
+      checkedIds: new Set(),
+      ops: { archiveAvailable: true, deleteAvailable: false, endpointCount: 0, handoffCommand: 'agy-check panel handoff' },
+      delModal: null,
+      opsBusy: false,
       overview: null,
       detail: null,
     };
@@ -874,6 +1037,7 @@ function renderPanelHtml() {
       if (RANGES[prefs.range]) state.range = prefs.range;
       if (SORTS.includes(prefs.sort)) state.sort = prefs.sort;
       state.showEmpty = prefs.showEmpty === true;
+      state.showArchived = prefs.showArchived === true;
       state.showCost = prefs.showCost !== false;
     } catch {}
 
@@ -883,6 +1047,7 @@ function renderPanelHtml() {
           range: state.range,
           sort: state.sort,
           showEmpty: state.showEmpty,
+          showArchived: state.showArchived,
           showCost: state.showCost,
         }));
       } catch {}
@@ -994,6 +1159,7 @@ function renderPanelHtml() {
 
     function renderOverview(data) {
       state.overview = data;
+      if (data.ops) state.ops = data.ops;
       const auth = data.auth || {};
       const quota = data.quota || {};
       const summary = data.summary || {};
@@ -1011,6 +1177,9 @@ function renderPanelHtml() {
       renderQuota(quota, data.accounts || []);
       renderModels(summary.byModel || [], summary.cost?.byModel || {});
       renderSessions(data, summary);
+      if (state.detail && $('drawer').classList.contains('open')) {
+        renderDetailOps(state.detail);
+      }
     }
 
     function renderTopbar(auth, quota, summary) {
@@ -1213,13 +1382,38 @@ function renderPanelHtml() {
       return '<div class="v">' + fmtUsd(value) + '</div><div class="s">' + note + partial + '</div>';
     }
 
+    function isSelectableSession(s) {
+      return Boolean(s && s.conversationId && !String(s.conversationId).startsWith('pid-') && (s.canArchive !== false || s.canDelete !== false));
+    }
+
+    function opsState() {
+      return state.overview?.ops || state.ops;
+    }
+
+    function handoffCmd() {
+      return opsState().handoffCommand || 'agy-check panel handoff';
+    }
+
+    function deleteBlockedTip() {
+      return 'Permanent delete needs a live agy API connection. Ask an agy agent to run: ' + handoffCmd();
+    }
+
+    function handoffHtml(cmd) {
+      const c = cmd || handoffCmd();
+      return '<span>In any open agy window, ask the agent to run</span> <code>' + esc(c) + '</code> ' +
+        '<button class="btn sm" type="button" data-copy-handoff="' + esc(c) + '">Copy</button>';
+    }
+
     function sessionRow(s) {
       const st = statusOf(s);
+      const selectable = isSelectableSession(s);
+      const checked = selectable && state.checkedIds.has(s.conversationId);
       const syncPill = s.syncStatus === 'unsynced'
         ? '<span class="pill warn" title="Running process holds an older account">unsynced</span>'
         : (s.syncStatus === 'other_account' && s.accountEmail
           ? '<span class="pill" title="' + esc(s.accountEmail) + '">' + esc(s.accountEmail.split('@')[0]) + '</span>'
           : '');
+      const archPill = s.archived ? '<span class="pill">archived</span>' : '';
       const meta = segs([
         s.shortId,
         s.currentDir,
@@ -1254,11 +1448,18 @@ function renderPanelHtml() {
         ' + uncached ' + fmtInt(s.totalUncachedInput) + ' | output ' + fmtInt(s.totalOutput);
       const rowCls = [
         state.selectedId === s.conversationId ? 'selected' : '',
+        checked ? 'checked' : '',
+        s.archived ? 'archived' : '',
         s.syncStatus === 'unsynced' ? 'unsynced' : '',
       ].filter(Boolean).join(' ');
 
+      const selCell = selectable
+        ? '<td class="c-sel"><label class="sel-hit"><input class="row-check" type="checkbox" data-check-id="' + esc(s.conversationId) + '" aria-label="Select ' + esc(s.title || s.shortId) + '"' + (checked ? ' checked' : '') + ' /></label></td>'
+        : '<td class="c-sel"></td>';
+
       return '<tr class="' + rowCls + '" data-id="' + esc(s.conversationId) + '">' +
-        '<td class="c-status"><div class="status"><span class="dot ' + st + '"></span>' + STATUS_LABEL[st] + syncPill + '</div>' +
+        selCell +
+        '<td class="c-status"><div class="status"><span class="dot ' + st + '"></span>' + STATUS_LABEL[st] + syncPill + archPill + '</div>' +
           '<div class="s" title="' + esc(fmtStamp(s.lastActivityMs)) + '">' + fmtRel(s.lastActivityMs) + '</div></td>' +
         '<td class="col-session c-session"><div class="title" title="' + esc(s.title) + '">' + esc(s.title || s.shortId) + '</div>' +
           '<div class="meta">' + meta + '</div></td>' +
@@ -1282,14 +1483,23 @@ function renderPanelHtml() {
       const hiddenEmpty = summary.hiddenEmptyCount || 0;
       $('btnToggleEmpty').textContent = 'Show empty' + (!state.showEmpty && hiddenEmpty > 0 ? ' (' + hiddenEmpty + ')' : '');
       $('btnToggleEmpty').setAttribute('aria-pressed', String(state.showEmpty));
+      const archivedCount = summary.archivedCount || 0;
+      $('btnToggleArchived').textContent = 'Show archived' + (archivedCount > 0 ? ' (' + archivedCount + ')' : '');
+      $('btnToggleArchived').setAttribute('aria-pressed', String(state.showArchived));
       $('btnToggleCost').setAttribute('aria-pressed', String(state.showCost));
       $('sessTable').classList.toggle('hide-cost', !state.showCost);
       updateAccountFilter(data.accounts || [], sessions, summary);
       updateSortHeaders();
 
+      const visibleSelectable = new Set(sessions.filter(isSelectableSession).map(s => s.conversationId));
+      for (const id of Array.from(state.checkedIds)) {
+        if (!visibleSelectable.has(id)) state.checkedIds.delete(id);
+      }
+
       $('sessionsBody').innerHTML = sessions.length === 0
         ? '<tr><td colspan="' + SESSION_COLS + '" class="empty">No sessions match the current filter.</td></tr>'
         : sessions.map(sessionRow).join('');
+      updateBulkBar();
     }
 
     function markSelectedRow() {
@@ -1501,10 +1711,42 @@ function renderPanelHtml() {
       }
     }
 
+    function renderDetailOps(d) {
+      const canArch = Boolean(d && isSelectableSession(d) && d.canArchive !== false);
+      const canDel = Boolean(d && isSelectableSession(d) && d.canDelete !== false);
+      const delReady = Boolean(opsState().deleteAvailable);
+      const archBtn = $('btnArchiveDetail');
+      archBtn.hidden = !canArch;
+      if (canArch) {
+        const label = d.archived ? 'Unarchive' : 'Archive';
+        $('btnArchiveDetailLabel').textContent = label;
+        archBtn.setAttribute('aria-label', label + ' session');
+        archBtn.title = label + ' session';
+        archBtn.disabled = state.opsBusy;
+      }
+      const delWrap = $('detailDeleteWrap');
+      const delBtn = $('btnDeleteDetail');
+      delWrap.hidden = !canDel;
+      if (canDel) {
+        delBtn.disabled = !delReady || state.opsBusy;
+        delWrap.classList.toggle('blocked', !delReady);
+        delWrap.title = delReady ? 'Permanently delete session' : deleteBlockedTip();
+      }
+      const note = $('detailOpsNote');
+      if (canDel && !delReady) {
+        note.hidden = false;
+        note.innerHTML = 'Permanent delete unavailable (no agy API connection). ' + handoffHtml();
+      } else {
+        note.hidden = true;
+        note.innerHTML = '';
+      }
+    }
+
     function renderDetail(d) {
       const st = statusOf(d);
       $('detailKicker').innerHTML = '<span class="dot ' + st + '"></span><span>' +
-        segs([STATUS_LABEL[st], esc(d.modelLabel || '--'), 'updated ' + esc(fmtRel(d.lastActivityMs))]) + '</span>';
+        segs([STATUS_LABEL[st], esc(d.modelLabel || '--'), 'updated ' + esc(fmtRel(d.lastActivityMs))]) + '</span>' +
+        (d.archived ? '<span class="pill">archived</span>' : '');
       const editable = canRenameSession(d);
       const isEditingThis = state.renamingId && state.renamingId === d.conversationId;
       $('detailTitle').textContent = d.title || d.conversationId;
@@ -1515,10 +1757,12 @@ function renderPanelHtml() {
         cancelRename();
         showRenameNotice(d.conversationId);
       }
+      renderDetailOps(d);
 
       const sp = speedParts(d.speed);
       const syncTone = d.syncStatus === 'unsynced' ? 'warn' : '';
       $('detailChips').innerHTML = [
+        d.archived ? chip('state', 'Archived', { tone: 'warn' }) : '',
         chip('id', d.conversationId, { mono: true, copy: true }),
         d.cwd ? chip('cwd', d.cwd, { mono: true, copy: true }) : '',
         d.branch ? chip('branch', d.branch) : '',
@@ -1594,7 +1838,10 @@ function renderPanelHtml() {
       if (!detail) {
         // Fall back to the overview row so the drawer still opens with what is known.
         const row = (state.overview?.sessions || []).find(s => s.conversationId === id);
-        if (!row) return;
+        if (!row) {
+          closeDetail();
+          return;
+        }
         detail = Object.assign({}, row, { turns: [] });
       }
       state.detail = detail;
@@ -1633,6 +1880,7 @@ function renderPanelHtml() {
         account: state.account,
       });
       if (state.showEmpty) qs.set('empty', '1');
+      if (state.showArchived) qs.set('archived', '1');
       try {
         const res = await fetch('/api/overview?' + qs.toString());
         if (res.status === 401) {
@@ -1698,6 +1946,337 @@ function renderPanelHtml() {
       return ok;
     }
 
+    // ---------- Session archive / delete & bulk selection ----------
+
+    let toastTimer = null;
+    function hideToast() {
+      clearTimeout(toastTimer);
+      toastTimer = null;
+      $('opToast').hidden = true;
+    }
+
+    function showToast(text, opts = {}) {
+      clearTimeout(toastTimer);
+      toastTimer = null;
+      const el = $('opToast');
+      el.className = 'toast' + (opts.tone ? ' ' + opts.tone : '');
+      let body = '<div>' + esc(text) + '</div>';
+      if (Array.isArray(opts.failures) && opts.failures.length > 0) {
+        body += '<ul class="op-list">' + opts.failures.slice(0, 6).map(f =>
+          '<li class="t-bad">' + esc(f.label) + ': ' + esc(f.error) + '</li>'
+        ).join('') + (opts.failures.length > 6 ? '<li class="muted">+' + (opts.failures.length - 6) + ' more failures</li>' : '') + '</ul>';
+      }
+      if (opts.handoff) {
+        body += '<div class="handoff">' + handoffHtml(opts.handoff) + '</div>';
+      }
+      $('opToastBody').innerHTML = body;
+      el.hidden = false;
+      if (!opts.sticky) {
+        toastTimer = setTimeout(hideToast, opts.duration || 6500);
+      }
+    }
+
+    function showHandoffToast(message, cmd) {
+      showToast(message || 'Permanent delete needs a live agy API connection.', {
+        tone: 'warn',
+        handoff: cmd || handoffCmd(),
+        sticky: true,
+      });
+    }
+
+    function sessionLookup(id) {
+      const fromOv = (state.overview?.sessions || []).find(s => s.conversationId === id);
+      if (fromOv) return fromOv;
+      if (state.detail && state.detail.conversationId === id) return state.detail;
+      return { conversationId: id, shortId: id.slice(0, 8), title: id.slice(0, 8) };
+    }
+
+    function syncRowChecks() {
+      document.querySelectorAll('#sessionsBody > tr[data-id]').forEach(tr => {
+        const id = tr.dataset.id;
+        const checked = state.checkedIds.has(id);
+        tr.classList.toggle('checked', checked);
+        const cb = tr.querySelector('input.row-check');
+        if (cb) cb.checked = checked;
+      });
+    }
+
+    function updateBulkBar() {
+      const sessions = state.overview?.sessions || [];
+      const selectable = sessions.filter(isSelectableSession);
+      const count = state.checkedIds.size;
+      const selectAll = $('selectAll');
+      selectAll.disabled = selectable.length === 0;
+      selectAll.checked = selectable.length > 0 && selectable.every(s => state.checkedIds.has(s.conversationId));
+      selectAll.indeterminate = count > 0 && !selectAll.checked;
+
+      const bar = $('bulkBar');
+      bar.hidden = count === 0;
+      document.body.classList.toggle('bulk-open', count > 0);
+      if (count === 0) return;
+
+      $('bulkCount').textContent = count + (count === 1 ? ' session selected' : ' sessions selected');
+      const selectedRows = selectable.filter(s => state.checkedIds.has(s.conversationId));
+      const anyActive = selectedRows.some(s => !s.archived);
+      const anyArchived = selectedRows.some(s => s.archived);
+      $('btnBulkArchive').disabled = state.opsBusy || !anyActive;
+      $('btnBulkUnarchive').disabled = state.opsBusy || !anyArchived;
+
+      const delReady = Boolean(opsState().deleteAvailable);
+      $('btnBulkDelete').disabled = state.opsBusy || !delReady;
+      $('bulkDeleteWrap').classList.toggle('blocked', !delReady);
+      $('bulkDeleteWrap').title = delReady ? 'Permanently delete selected sessions' : deleteBlockedTip();
+    }
+
+    function clearSelection() {
+      state.checkedIds.clear();
+      syncRowChecks();
+      updateBulkBar();
+    }
+
+    async function runArchive(ids, archived, opts = {}) {
+      if (!Array.isArray(ids) || ids.length === 0 || state.opsBusy) return;
+      state.opsBusy = true;
+      updateBulkBar();
+      if (state.detail) renderDetailOps(state.detail);
+      const verb = archived ? 'Archiving' : 'Unarchiving';
+      showToast(verb + ' ' + ids.length + (ids.length === 1 ? ' session…' : ' sessions…'), { sticky: true });
+      try {
+        const res = await fetch('/api/sessions/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids, archived }),
+        });
+        if (res.status === 401) {
+          location.reload();
+          return;
+        }
+        const out = await res.json().catch(() => ({}));
+        if (!Array.isArray(out.results)) {
+          showToast(out.error || 'Archive request failed.', { tone: 'bad', sticky: true });
+          return;
+        }
+        const okItems = out.results.filter(r => r.ok);
+        const badItems = out.results.filter(r => !r.ok);
+        if (opts.fromBulk) {
+          for (const r of okItems) state.checkedIds.delete(r.conversationId);
+        }
+        const past = archived ? 'Archived' : 'Unarchived';
+        if (badItems.length === 0) {
+          const via = okItems.every(r => r.via === 'agy-api') ? ' (agy API)' : '';
+          showToast(past + ' ' + okItems.length + (okItems.length === 1 ? ' session' : ' sessions') + via + '.', { tone: 'ok' });
+        } else {
+          const summary = okItems.length > 0
+            ? past + ' ' + okItems.length + ' of ' + out.results.length + ' sessions; ' + badItems.length + ' failed:'
+            : (archived ? 'Archive' : 'Unarchive') + ' failed for ' + badItems.length + (badItems.length === 1 ? ' session:' : ' sessions:');
+          showToast(summary, {
+            tone: okItems.length > 0 ? 'warn' : 'bad',
+            failures: badItems.map(r => {
+              const s = sessionLookup(r.conversationId);
+              return { label: s.title || s.shortId, error: r.error || 'Failed' };
+            }),
+            sticky: true,
+          });
+        }
+        await fetchOverview();
+      } catch {
+        showToast('Could not reach the panel.', { tone: 'bad', sticky: true });
+      } finally {
+        state.opsBusy = false;
+        updateBulkBar();
+        if (state.detail) renderDetailOps(state.detail);
+      }
+    }
+
+    function updateDeleteConfirmBtn() {
+      const m = state.delModal;
+      if (!m) return;
+      const btn = $('btnDeleteConfirm');
+      if (m.busy || m.doneWithErrors) {
+        btn.disabled = true;
+        return;
+      }
+      if (m.step === 'running') {
+        btn.disabled = !$('deleteCloseCheck').checked;
+      } else {
+        btn.disabled = $('deleteConfirmInput').value.trim() !== 'DELETE';
+      }
+    }
+
+    function renderDeleteModal() {
+      const m = state.delModal;
+      if (!m) return;
+      const n = m.ids.length;
+      const plural = n === 1 ? 'session' : n + ' sessions';
+      if (m.step === 'running') {
+        const rn = m.running.length;
+        $('deleteModalTitle').textContent = 'Close open agy window' + (rn === 1 ? '' : 's') + ' and delete';
+        $('deleteWarn').innerHTML = '<strong>' + rn + ' selected ' + (rn === 1 ? 'session is' : 'sessions are') +
+          ' still open in a running agy window.</strong> Closing them sends SIGTERM (then SIGKILL after 5s) and will interrupt any unsaved or ongoing work in those windows before permanently deleting ' + esc(plural) + '.';
+        $('deleteList').innerHTML = m.running.map(r => {
+          const metaParts = [
+            'PID ' + r.pid,
+            r.startedAtMs ? 'open since ' + fmtRel(r.startedAtMs) : '',
+            r.cwd || '',
+          ].filter(Boolean);
+          return '<li class="run">' +
+            '<div class="run-head"><span class="t" title="' + esc(r.title || r.conversationId) + '">' + esc(r.title || r.conversationId) + '</span>' +
+            '<span class="id">' + esc(String(r.conversationId || '').slice(0, 8)) + '</span></div>' +
+            '<div class="run-meta" title="' + esc(fmtStamp(r.startedAtMs)) + '">' + esc(metaParts.join(' · ')) + '</div>' +
+            (r.isGenerating ? '<div class="run-gen">Currently generating a response — closing now will interrupt it.</div>' : '') +
+          '</li>';
+        }).join('');
+        $('deleteConfirmWrap').hidden = true;
+        $('deleteCloseRow').hidden = false;
+        $('deleteCloseCheck').disabled = m.busy;
+        $('deleteCloseLabel').textContent = 'Close ' + (rn === 1 ? 'this open agy window' : 'these ' + rn + ' open agy windows') + ' and permanently delete ' + plural;
+        $('btnDeleteConfirm').textContent = m.busy ? 'Closing & deleting…' : 'Close windows & delete';
+      } else {
+        $('deleteModalTitle').textContent = n === 1 ? 'Permanently delete session' : 'Permanently delete ' + n + ' sessions';
+        $('deleteWarn').innerHTML = '<strong>This cannot be undone.</strong> The selected ' + (n === 1 ? 'session' : n + ' sessions') +
+          ' will be permanently removed via agy (transcript, database, annotations, and search index).';
+        const cap = 8;
+        const shown = m.items.slice(0, cap).map(item =>
+          '<li><span class="t" title="' + esc(item.title) + '">' + esc(item.title) + '</span><span class="id">' + esc(item.shortId) + '</span></li>'
+        );
+        if (m.items.length > cap) {
+          shown.push('<li class="more-row">+' + (m.items.length - cap) + ' more sessions</li>');
+        }
+        $('deleteList').innerHTML = shown.join('');
+        $('deleteConfirmWrap').hidden = false;
+        $('deleteConfirmInput').disabled = m.busy;
+        $('deleteCloseRow').hidden = true;
+        $('btnDeleteConfirm').textContent = m.busy ? 'Deleting…' : 'Delete permanently';
+      }
+      $('btnDeleteCancel').disabled = m.busy;
+      $('btnDeleteCancel').textContent = m.doneWithErrors ? 'Close' : 'Cancel';
+      $('btnDeleteConfirm').hidden = Boolean(m.doneWithErrors);
+      updateDeleteConfirmBtn();
+    }
+
+    function openDeleteModal(ids) {
+      if (!Array.isArray(ids) || ids.length === 0) return;
+      if (!opsState().deleteAvailable) {
+        showHandoffToast();
+        return;
+      }
+      const items = ids.map(id => {
+        const s = sessionLookup(id);
+        return { conversationId: id, shortId: s.shortId || id.slice(0, 8), title: s.title || s.shortId || id.slice(0, 8) };
+      });
+      state.delModal = { ids: ids.slice(), items, step: 'confirm', running: [], busy: false, doneWithErrors: false };
+      $('deleteConfirmInput').value = '';
+      $('deleteCloseCheck').checked = false;
+      $('deleteStatus').className = 'del-status';
+      $('deleteStatus').innerHTML = '';
+      $('deleteHandoff').hidden = true;
+      $('deleteHandoff').innerHTML = '';
+      $('deleteResults').hidden = true;
+      $('deleteResults').innerHTML = '';
+      renderDeleteModal();
+      $('deleteModal').classList.add('open');
+      $('deleteConfirmInput').focus();
+    }
+
+    function closeDeleteModal() {
+      if (state.delModal && state.delModal.busy) return;
+      state.delModal = null;
+      $('deleteModal').classList.remove('open');
+    }
+
+    async function submitDeleteModal() {
+      const m = state.delModal;
+      if (!m || m.busy || $('btnDeleteConfirm').disabled) return;
+      const closeRunning = m.step === 'running';
+      m.busy = true;
+      $('deleteHandoff').hidden = true;
+      $('deleteHandoff').innerHTML = '';
+      $('deleteResults').hidden = true;
+      $('deleteResults').innerHTML = '';
+      $('deleteStatus').className = 'del-status';
+      $('deleteStatus').innerHTML = '<span class="spin"></span>' +
+        (closeRunning ? 'Closing agy window(s) and deleting through agy (this may take a few seconds)…' : 'Deleting through agy…');
+      renderDeleteModal();
+
+      try {
+        const res = await fetch('/api/sessions/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: m.ids, closeRunning, confirm: 'DELETE' }),
+        });
+        if (res.status === 401) {
+          location.reload();
+          return;
+        }
+        const out = await res.json().catch(() => ({}));
+        if (res.status === 409 && out.code === 'running') {
+          m.busy = false;
+          m.step = 'running';
+          m.running = Array.isArray(out.running) ? out.running : [];
+          $('deleteCloseCheck').checked = false;
+          $('deleteStatus').className = 'del-status';
+          $('deleteStatus').innerHTML = '';
+          renderDeleteModal();
+          $('deleteCloseCheck').focus();
+          return;
+        }
+        if (res.status === 409 && (out.code === 'no_endpoint' || out.code === 'endpoint_would_close')) {
+          m.busy = false;
+          $('deleteStatus').className = 'del-status warn';
+          $('deleteStatus').textContent = out.error || 'No usable agy API connection.';
+          $('deleteHandoff').hidden = false;
+          $('deleteHandoff').innerHTML = handoffHtml(out.handoffCommand);
+          renderDeleteModal();
+          return;
+        }
+        if (!Array.isArray(out.results)) {
+          m.busy = false;
+          $('deleteStatus').className = 'del-status bad';
+          $('deleteStatus').textContent = out.error || 'Permanent delete failed.';
+          renderDeleteModal();
+          return;
+        }
+
+        const okItems = out.results.filter(r => r.ok);
+        const badItems = out.results.filter(r => !r.ok);
+        const closedCount = Array.isArray(out.closedPids) ? out.closedPids.length : 0;
+        for (const r of okItems) {
+          state.checkedIds.delete(r.conversationId);
+          if (state.selectedId === r.conversationId) closeDetail();
+        }
+        await fetchOverview();
+
+        if (badItems.length === 0) {
+          m.busy = false;
+          closeDeleteModal();
+          const msg = 'Deleted ' + okItems.length + (okItems.length === 1 ? ' session' : ' sessions') +
+            (closedCount > 0 ? ' and closed ' + closedCount + (closedCount === 1 ? ' agy window' : ' agy windows') : '') + '.';
+          showToast(msg, { tone: 'ok' });
+          return;
+        }
+
+        m.busy = false;
+        m.doneWithErrors = true;
+        $('deleteStatus').className = 'del-status ' + (okItems.length > 0 ? 'warn' : 'bad');
+        $('deleteStatus').textContent = (okItems.length > 0
+          ? 'Deleted ' + okItems.length + ' of ' + out.results.length + ' sessions' + (closedCount > 0 ? ' (closed ' + closedCount + ' window(s))' : '') + '. '
+          : 'Delete failed. ') + badItems.length + (badItems.length === 1 ? ' item could not be deleted:' : ' items could not be deleted:');
+        $('deleteResults').hidden = false;
+        $('deleteResults').innerHTML = badItems.map(r => {
+          const item = m.items.find(x => x.conversationId === r.conversationId) || sessionLookup(r.conversationId);
+          return '<li class="run"><div class="run-head"><span class="t">' + esc(item.title || item.shortId) + '</span>' +
+            '<span class="id">' + esc(item.shortId || r.conversationId.slice(0, 8)) + '</span></div>' +
+            '<div class="run-meta t-bad">' + esc(r.error || 'Delete failed') + '</div></li>';
+        }).join('');
+        renderDeleteModal();
+      } catch {
+        m.busy = false;
+        $('deleteStatus').className = 'del-status bad';
+        $('deleteStatus').textContent = 'Could not reach the panel.';
+        renderDeleteModal();
+      }
+    }
+
     // ---------- Events ----------
 
     $('rangeSeg').addEventListener('click', (e) => {
@@ -1736,6 +2315,12 @@ function renderPanelHtml() {
       fetchOverview();
     });
 
+    $('btnToggleArchived').addEventListener('click', () => {
+      state.showArchived = !state.showArchived;
+      savePrefs();
+      fetchOverview();
+    });
+
     $('btnToggleCost').addEventListener('click', () => {
       state.showCost = !state.showCost;
       savePrefs();
@@ -1743,7 +2328,31 @@ function renderPanelHtml() {
       $('sessTable').classList.toggle('hide-cost', !state.showCost);
     });
 
+    $('selectAll').addEventListener('change', (e) => {
+      const sessions = (state.overview?.sessions || []).filter(isSelectableSession);
+      if (e.target.checked) {
+        for (const s of sessions) state.checkedIds.add(s.conversationId);
+      } else {
+        state.checkedIds.clear();
+      }
+      syncRowChecks();
+      updateBulkBar();
+    });
+
+    $('sessionsBody').addEventListener('change', (e) => {
+      const cb = e.target.closest('input.row-check');
+      if (!cb) return;
+      const id = cb.dataset.checkId;
+      if (!id) return;
+      if (cb.checked) state.checkedIds.add(id);
+      else state.checkedIds.delete(id);
+      const tr = cb.closest('tr[data-id]');
+      if (tr) tr.classList.toggle('checked', cb.checked);
+      updateBulkBar();
+    });
+
     $('sessionsBody').addEventListener('click', (e) => {
+      if (e.target.closest('.c-sel')) return;
       const tr = e.target.closest('tr[data-id]');
       if (!tr) return;
       if (tr.dataset.id === state.selectedId) {
@@ -1751,6 +2360,75 @@ function renderPanelHtml() {
         return;
       }
       fetchDetail(tr.dataset.id);
+    });
+
+    $('btnBulkArchive').addEventListener('click', () => {
+      const ids = Array.from(state.checkedIds).filter(id => !sessionLookup(id).archived);
+      runArchive(ids, true, { fromBulk: true });
+    });
+    $('btnBulkUnarchive').addEventListener('click', () => {
+      const ids = Array.from(state.checkedIds).filter(id => sessionLookup(id).archived);
+      runArchive(ids, false, { fromBulk: true });
+    });
+    $('btnBulkDelete').addEventListener('click', () => openDeleteModal(Array.from(state.checkedIds)));
+    $('bulkDeleteWrap').addEventListener('click', (e) => {
+      if ($('bulkDeleteWrap').classList.contains('blocked')) {
+        e.preventDefault();
+        showHandoffToast();
+      }
+    });
+    $('btnBulkClear').addEventListener('click', clearSelection);
+
+    $('btnArchiveDetail').addEventListener('click', () => {
+      if (!state.detail || !isSelectableSession(state.detail)) return;
+      runArchive([state.detail.conversationId], !state.detail.archived, { fromBulk: false });
+    });
+    $('btnDeleteDetail').addEventListener('click', () => {
+      if (!state.detail || !isSelectableSession(state.detail)) return;
+      openDeleteModal([state.detail.conversationId]);
+    });
+    $('detailDeleteWrap').addEventListener('click', (e) => {
+      if ($('detailDeleteWrap').classList.contains('blocked')) {
+        e.preventDefault();
+        showHandoffToast();
+      }
+    });
+
+    $('deleteConfirmInput').addEventListener('input', updateDeleteConfirmBtn);
+    $('deleteConfirmInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !$('btnDeleteConfirm').disabled) {
+        e.preventDefault();
+        submitDeleteModal();
+      }
+    });
+    $('deleteCloseCheck').addEventListener('change', updateDeleteConfirmBtn);
+    $('deleteCloseCheck').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !$('btnDeleteConfirm').disabled) {
+        e.preventDefault();
+        submitDeleteModal();
+      }
+    });
+    $('btnDeleteCancel').addEventListener('click', closeDeleteModal);
+    $('btnDeleteConfirm').addEventListener('click', submitDeleteModal);
+    $('deleteModal').addEventListener('click', (e) => {
+      if (e.target === $('deleteModal')) closeDeleteModal();
+    });
+    $('deleteModal').addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDeleteModal();
+      }
+    });
+
+    $('btnToastClose').addEventListener('click', hideToast);
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-copy-handoff]');
+      if (!btn) return;
+      if (await copyText(btn.dataset.copyHandoff || handoffCmd())) {
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+      }
     });
 
     $('btnCloseDetail').addEventListener('click', closeDetail);
@@ -1877,12 +2555,14 @@ function renderPanelHtml() {
     document.addEventListener('keydown', (e) => {
       if (e.target.closest?.('input, select, textarea')) return;
       if (e.key === 'Escape') {
-        if ($('lanModal').classList.contains('open')) closeLanModal();
+        if ($('deleteModal').classList.contains('open')) closeDeleteModal();
+        else if ($('lanModal').classList.contains('open')) closeLanModal();
         else if ($('syncModal').classList.contains('open')) $('syncModal').classList.remove('open');
         else if (state.selectedId) closeDetail();
+        else if (state.checkedIds.size > 0) clearSelection();
         return;
       }
-      if (!state.selectedId || $('syncModal').classList.contains('open') || $('lanModal').classList.contains('open')) return;
+      if (!state.selectedId || $('deleteModal').classList.contains('open') || $('syncModal').classList.contains('open') || $('lanModal').classList.contains('open')) return;
       if (e.key === 'F2' && canRenameSession(state.detail)) {
         e.preventDefault();
         startRename();

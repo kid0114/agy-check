@@ -300,7 +300,7 @@ function detectRunningAgySessions(options = {}) {
 
   const byPidMeta = new Map();
   for (const p of procs) {
-    byPidMeta.set(p.pid, { cwd: null, openDbs: [], openLogs: [] });
+    byPidMeta.set(p.pid, { cwd: null, presenceLocks: [], openDbs: [], openLogs: [] });
   }
 
   try {
@@ -325,6 +325,9 @@ function detectRunningAgySessions(options = {}) {
 
       if (fd === 'cwd' && name.startsWith('/')) {
         meta.cwd = name;
+      } else if (name.includes('/presence/') && name.endsWith('.lock')) {
+        const um = name.match(UUID_RE);
+        if (um && !meta.presenceLocks.includes(um[0])) meta.presenceLocks.push(um[0]);
       } else if (name.includes('/conversations/') && name.endsWith('.db')) {
         const um = name.match(UUID_RE);
         if (um && !meta.openDbs.includes(um[0])) meta.openDbs.push(um[0]);
@@ -337,10 +340,13 @@ function detectRunningAgySessions(options = {}) {
   }
 
   return procs.map(proc => {
-    const meta = byPidMeta.get(proc.pid) || { cwd: null, openDbs: [], openLogs: [] };
+    const meta = byPidMeta.get(proc.pid) || { cwd: null, presenceLocks: [], openDbs: [], openLogs: [] };
     const candidates = [];
+    for (const lockCid of meta.presenceLocks) {
+      if (!candidates.includes(lockCid)) candidates.push(lockCid);
+    }
     const mCmd = proc.cmd.match(new RegExp(`--conversation(?:=|\\s+)(${UUID_RE.source})`, 'i'));
-    if (mCmd) candidates.push(mCmd[1]);
+    if (mCmd && !candidates.includes(mCmd[1])) candidates.push(mCmd[1]);
     for (const dbCid of meta.openDbs) {
       if (!candidates.includes(dbCid)) candidates.push(dbCid);
     }
@@ -377,12 +383,21 @@ function detectRunningAgySessions(options = {}) {
       switchedAt,
     });
 
+    // Presence locks identify the conversation(s) actively open in this window.
+    // Only fall back to open .db FDs when no presence lock is held, because an
+    // agy LS serving UpdateConversation/CreateConversation briefly opens other
+    // conversations' .db files without attaching a window to them.
+    const activeHeld = meta.presenceLocks.length > 0
+      ? [...meta.presenceLocks, ...(mCmd ? [mCmd[1]] : [])]
+      : [...(mCmd ? [mCmd[1]] : []), ...meta.openDbs];
+
     return {
       pid: proc.pid,
       startedAtMs: proc.startedAtMs,
       cmd: proc.cmd,
       cwd: meta.cwd || snapshot?.cwd || null,
       conversationId,
+      openConversationIds: [...new Set(activeHeld)],
       syncStatus: syncInfo.syncStatus,
       sessionAccountEmail: syncInfo.sessionAccountEmail,
       syncReason: syncInfo.reason,
